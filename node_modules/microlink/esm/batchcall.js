@@ -1,0 +1,69 @@
+import serialize from "./serialize.js";
+
+/**
+ *
+ * @param {*} it
+ * @param {{ params, method }[]} batch
+ * @param {*} param2
+ * @returns
+ */
+export default function batchcall(it, batch, { debug_level = 0 } = {}) {
+  let all_params_functions = {};
+
+  // pre-process and serialize requests
+  const requests = batch.map(({ id, method, params }) => {
+    if (typeof id !== "number") id = Math.random();
+    const [params_serialized, params_functions] = serialize(params || [], "microlink.call:");
+    Object.assign(all_params_functions, params_functions);
+    return {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: params_serialized
+    };
+  });
+  if (debug_level >= 2) console.log("[microlink.batchcall] requests serialized to ", requests);
+  const ids = requests.map(req => req.id);
+
+  return new Promise(resolve => {
+    const listener = async function listener(evt) {
+      if (debug_level >= 2) {
+        console.log("[microlink.batchcall] response listener received message event with data", evt.data);
+      }
+      let { data } = evt;
+
+      if (typeof data !== "object" || data === null) return;
+
+      // worker is requesting that the main thread run a function for it
+      if (data.jsonrpc === "2.0" && data.method && data.method in all_params_functions) {
+        if (!Array.isArray(data.params)) throw Error("[microlink.batchcall] params should be an array");
+        const result = await all_params_functions[data.method](...data.params);
+        const msg = { jsonrpc: "2.0", result, id: data.id };
+        if (debug_level >= 2) console.log("[microlink.batchcall] posting message down to worker:", msg);
+        return it.postMessage(msg);
+      }
+
+      if (Array.isArray(data) && data.every(it => typeof it === "object" && ids.includes(it.id))) {
+        if (debug_level >= 2) console.log("[microlink.batchcall] removing exhausted listener");
+        it.removeEventListener("message", listener);
+
+        // enable garbage collection of params
+        // even if promise is used later
+        all_params_functions = null;
+
+        // sort output results by input order
+        data.sort((a, b) => Math.sign(ids.indexOf(a.id) - ids.indexOf(b.id)));
+
+        const results = data.map(res => res.result);
+
+        if (debug_level >= 2) console.log("[microlink.batchcall] resolving batch call:", results);
+
+        resolve(results);
+      }
+    };
+    it.addEventListener("message", listener);
+
+    if (debug_level >= 2) console.log("[microlink.batchcall] posting message down to worker:", requests);
+    return it.postMessage(requests);
+  });
+}

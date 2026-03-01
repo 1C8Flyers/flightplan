@@ -1,0 +1,170 @@
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  color: #121212;
+}
+
+.subtitle {
+  margin-top: -0.5rem;
+  margin-bottom: 1.2rem;
+  color: #333;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #d3d3d3;
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #c1c1c1;
+}
+
+button {
+  background: #0d47a1;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #7f9ac7;
+}
+
+.waypoints {
+  margin-bottom: 0.8rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.weather p {
+  margin: 0.35rem 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  border: 1px solid #ddd;
+  padding: 0.45rem;
+  text-align: center;
+}
+
+th {
+  background: #f3f7ff;
+}
+
+.totals {
+  margin-top: 0.8rem;
+  font-weight: 600;
+}
+
+.legend {
+  margin-top: 0.45rem;
+  font-size: 0.9rem;
+  color: #2f2f2f;
+}
+
+.error {
+  color: #b00020;
+}
+
+.suggested-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.suggested-item {
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.sectional-frame {
+  margin-top: 0.7rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sectional-frame iframe {
+  width: 100%;
+  height: 560px;
+  border: none;
+}
+
+.sectional-map {
+  margin-top: 0.7rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  height: 640px;
+  overflow: hidden;
+}
+
+.route-marker-icon {
+  background: transparent;
+  border: none;
+}
+
+.route-marker {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.route-marker.marker-start {
+  background: #2e7d32;
+}
+
+.route-marker.marker-end {
+  background: #c62828;
+}
+
+.route-marker.marker-waypoint {
+  background: #1565c0;
+}
+
+@media (max-width: 760px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
