@@ -50,6 +50,10 @@ button {
   cursor: pointer;
 }
 
+.print-button {
+  margin-left: 0.6rem;
+}
+
 button:disabled {
   background: #7f9ac7;
 }
@@ -163,8 +167,116 @@ th {
   background: #1565c0;
 }
 
+.print-packet {
+  margin-top: 1rem;
+}
+
+.print-navlog-table {
+  margin-top: 0.8rem;
+}
+
+.write-cell {
+  min-width: 58px;
+  height: 26px;
+  background: #fff;
+}
+
+.notes-cell {
+  min-width: 180px;
+}
+
+.print-notes-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.7rem;
+}
+
+.write-block {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  min-height: 120px;
+  padding: 0.45rem;
+}
+
+.print-charts-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.9rem;
+}
+
+.print-chart-item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.6rem;
+}
+
+.print-chart-item p {
+  margin-top: -0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.print-chart-item img {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
 @media (max-width: 760px) {
   .columns {
     grid-template-columns: 1fr;
+  }
+
+  .print-notes-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  @page {
+    size: auto;
+    margin: 0.4in;
+  }
+
+  .app {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .screen-only {
+    display: none !important;
+  }
+
+  .print-packet {
+    display: block;
+    border: none;
+    padding: 0;
+    margin: 0;
+    break-inside: avoid;
+  }
+
+  .print-navlog-table {
+    font-size: 10.5px;
+  }
+
+  .print-navlog-table th,
+  .print-navlog-table td {
+    border: 1px solid #777;
+    padding: 0.2rem;
+  }
+
+  .write-cell {
+    height: 20px;
+  }
+
+  .write-block {
+    min-height: 110px;
+    break-inside: avoid;
+  }
+
+  .print-chart-item {
+    break-inside: avoid;
   }
 }

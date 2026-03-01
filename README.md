@@ -10,7 +10,9 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 - Live weather (METAR + TAF)
 - Live FAA NAS delay feed integration
 - Suggested enroute waypoint airports auto-generated along route corridor
-- FAA sectional chart selector + embedded PDF viewer
+- FAA sectional chart selector + route overlay map
+- Printable in-flight nav log packet with write-in fields (ATD/ATA/actual GS/fuel/notes)
+- Printable departure and arrival chart pages based on nearest FAA sectional coverage
 - Automatic ETE and fuel estimates by leg and totals
 
 ## Data Sources
@@ -46,3 +48,4 @@ npm run build
 
 - Wind inputs are interpreted as **true wind direction FROM** and speed in knots.
 - Heading and groundspeed calculations are planning estimates and should be validated in standard preflight workflow.
+- Dragging intermediate waypoints renames to nearby FAA airport/navaid when available; otherwise fallback is `WP#`.

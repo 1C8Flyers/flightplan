@@ -73,6 +73,14 @@ type SectionalOverlayMetadata = {
   imageUrl: string
 }
 
+type PrintableChart = {
+  role: 'Departure' | 'Arrival'
+  airportIcao: string
+  chartName: string
+  effectiveDate: string
+  imageUrl: string
+}
+
 type LandmarkNameResponse = {
   ident: string | null
   label: string | null
@@ -234,6 +242,8 @@ function App() {
   const [routePoints, setRoutePoints] = useState<Point[]>([])
   const [mapLoading, setMapLoading] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
+  const [printableCharts, setPrintableCharts] = useState<PrintableChart[]>([])
+  const [printChartsLoading, setPrintChartsLoading] = useState(false)
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
@@ -303,6 +313,77 @@ function App() {
       .slice(1, -1)
       .map((point) => `${point.ident},${point.lat.toFixed(6)},${point.lon.toFixed(6)}`)
       .join('\n')
+  }
+
+  function findNearestSectional(lat: number, lon: number, availableSectionals: SectionalChart[]) {
+    return availableSectionals
+      .filter((sectional) => sectional.centerLat != null && sectional.centerLon != null)
+      .sort((a, b) => {
+        const aLat = a.centerLat ?? 0
+        const aLon = a.centerLon ?? 0
+        const bLat = b.centerLat ?? 0
+        const bLon = b.centerLon ?? 0
+        const aDist2 = (aLat - lat) ** 2 + (aLon - lon) ** 2
+        const bDist2 = (bLat - lat) ** 2 + (bLon - lon) ** 2
+        return aDist2 - bDist2
+      })[0] ?? null
+  }
+
+  async function loadPrintableCharts(
+    depAirportResponse: AirportResponse,
+    arrAirportResponse: AirportResponse,
+    availableSectionals: SectionalChart[]
+  ) {
+    setPrintChartsLoading(true)
+
+    try {
+      const depChart = findNearestSectional(depAirportResponse.airport.lat, depAirportResponse.airport.lon, availableSectionals)
+      const arrChart = findNearestSectional(arrAirportResponse.airport.lat, arrAirportResponse.airport.lon, availableSectionals)
+
+      const chartCandidates = [
+        depChart
+          ? {
+            role: 'Departure' as const,
+            airportIcao: depAirportResponse.airport.icao,
+            chart: depChart
+          }
+          : null,
+        arrChart
+          ? {
+            role: 'Arrival' as const,
+            airportIcao: arrAirportResponse.airport.icao,
+            chart: arrChart
+          }
+          : null
+      ].filter((value): value is NonNullable<typeof value> => Boolean(value))
+
+      if (!chartCandidates.length) {
+        setPrintableCharts([])
+        return
+      }
+
+      const overlays = await Promise.all(
+        chartCandidates.map(async (candidate) => {
+          const metadata = await fetchJson<SectionalOverlayMetadata>(
+            `/api/sectionals/overlay-metadata?source=${encodeURIComponent(candidate.chart.url)}`
+          )
+
+          return {
+            role: candidate.role,
+            airportIcao: candidate.airportIcao,
+            chartName: candidate.chart.name,
+            effectiveDate: candidate.chart.effectiveDate,
+            imageUrl: metadata.imageUrl
+          }
+        })
+      )
+
+      setPrintableCharts(overlays)
+    } catch {
+      setPrintableCharts([])
+    } finally {
+      setPrintChartsLoading(false)
+    }
   }
 
   async function recomputeRouteCalculations(points: Point[]) {
@@ -449,6 +530,8 @@ function App() {
         setSelectedSectionalUrl(selected.url)
       }
 
+      await loadPrintableCharts(depAirportResponse, arrAirportResponse, sectionalResponse.sectionals)
+
       if (!waypointsInput.trim() && suggestionResponse.suggestions.length) {
         const value = suggestionResponse.suggestions
           .map((waypoint) => `${waypoint.ident},${waypoint.lat.toFixed(6)},${waypoint.lon.toFixed(6)}`)
@@ -497,6 +580,7 @@ function App() {
       setSuggestedWaypoints([])
       setWindsAloft(null)
       setRoutePoints([])
+      setPrintableCharts([])
     } finally {
       setLoading(false)
     }
@@ -674,10 +758,10 @@ function App() {
 
   return (
     <main className="app">
-      <h1>VFR Nav Log Builder</h1>
-      <p className="subtitle">Build a pilot nav log with live airport, weather, and FAA status data.</p>
+      <h1 className="screen-only">VFR Nav Log Builder</h1>
+      <p className="subtitle screen-only">Build a pilot nav log with live airport, weather, and FAA status data.</p>
 
-      <section className="card">
+      <section className="card screen-only">
         <h2>Flight Setup</h2>
         <div className="grid">
           <label>
@@ -723,11 +807,16 @@ function App() {
         <button onClick={buildNavLog} disabled={loading}>
           {loading ? 'Loading data...' : 'Build Nav Log'}
         </button>
+        {legs.length > 0 && (
+          <button className="print-button" onClick={() => window.print()} type="button">
+            Print Nav Log Packet
+          </button>
+        )}
         {error && <p className="error">{error}</p>}
       </section>
 
       {suggestedWaypoints.length > 0 && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>Suggested Enroute Waypoints</h2>
           <p className="subtitle">Real airport checkpoints near your route corridor.</p>
           <div className="suggested-list">
@@ -744,7 +833,7 @@ function App() {
       )}
 
       {windsAloft && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>Winds Aloft (Live)</h2>
           <p>
             Station {windsAloft.station} · Requested {windsAloft.requestedAltitudeFt} ft · Forecast Level {windsAloft.selectedAltitudeFt} ft
@@ -758,7 +847,7 @@ function App() {
       )}
 
       {depAirport && arrAirport && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>Airport + FAA Status</h2>
           <div className="columns">
             <article>
@@ -792,7 +881,7 @@ function App() {
       )}
 
       {(depWeather || arrWeather) && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>Weather</h2>
           <div className="columns weather">
             <article>
@@ -812,7 +901,7 @@ function App() {
       )}
 
       {legs.length > 0 && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>Nav Log Legs</h2>
           <table>
             <thead>
@@ -864,7 +953,7 @@ function App() {
       )}
 
       {sectionals.length > 0 && (
-        <section className="card">
+        <section className="card screen-only">
           <h2>FAA Sectional Chart + Route Overlay</h2>
           <label>
             Select Sectional
@@ -892,6 +981,97 @@ function App() {
               </p>
             </>
           )}
+        </section>
+      )}
+
+      {legs.length > 0 && depAirport && arrAirport && (
+        <section className="card print-packet">
+          <h2>VFR Nav Log - Printable Flight Packet</h2>
+          <p>
+            Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
+            {' · '}
+            Date: __________
+            {' · '}
+            Aircraft: __________
+            {' · '}
+            Tail #: __________
+          </p>
+          <p>
+            Planned TAS: {tas} kts {' · '}
+            Cruise Altitude: {cruiseAltitudeFt} ft {' · '}
+            Fuel Burn: {fuelBurn} gph
+          </p>
+
+          <table className="print-navlog-table">
+            <thead>
+              <tr>
+                <th>Leg</th>
+                <th>From</th>
+                <th>To</th>
+                <th>TC</th>
+                <th>MH</th>
+                <th>Dist</th>
+                <th>Plan GS</th>
+                <th>Plan ETE</th>
+                <th>ATD</th>
+                <th>ATA</th>
+                <th>Actual GS</th>
+                <th>Fuel Used</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {legs.map((leg, index) => (
+                <tr key={`print-${leg.from}-${leg.to}-${index}`}>
+                  <td>{index + 1}</td>
+                  <td>{leg.from}</td>
+                  <td>{leg.to}</td>
+                  <td>{leg.trueCourse.toFixed(0)}°</td>
+                  <td>{leg.magneticHeading.toFixed(0)}°</td>
+                  <td>{leg.distanceNm.toFixed(1)} NM</td>
+                  <td>{leg.groundSpeed.toFixed(0)} kt</td>
+                  <td>{leg.eteMinutes.toFixed(1)} min</td>
+                  <td className="write-cell" />
+                  <td className="write-cell" />
+                  <td className="write-cell" />
+                  <td className="write-cell" />
+                  <td className="write-cell notes-cell" />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <p className="totals">
+            Total Distance: {totals.totalDistance.toFixed(1)} NM · Total Time: {totals.totalTime.toFixed(1)} min · Planned Fuel: {totals.totalFuel.toFixed(2)} gal
+          </p>
+
+          <div className="print-notes-grid">
+            <div className="write-block">
+              <strong>Preflight / Departure Notes</strong>
+            </div>
+            <div className="write-block">
+              <strong>Enroute Notes</strong>
+            </div>
+            <div className="write-block">
+              <strong>Arrival Notes</strong>
+            </div>
+          </div>
+
+          <h3>Departure and Arrival Airport Charts</h3>
+          {printChartsLoading && <p>Loading printable chart images...</p>}
+          {!printChartsLoading && printableCharts.length === 0 && (
+            <p>Printable charts unavailable for this route.</p>
+          )}
+
+          <div className="print-charts-grid">
+            {printableCharts.map((chart) => (
+              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
+                <h4>{chart.role} Chart - {chart.airportIcao}</h4>
+                <p>{chart.chartName} ({chart.effectiveDate})</p>
+                <img src={chart.imageUrl} alt={`${chart.role} chart for ${chart.airportIcao}`} />
+              </article>
+            ))}
+          </div>
         </section>
       )}
     </main>
