@@ -693,7 +693,6 @@ function App() {
         loadRouteNavaids(points)
       ])
 
-      setActiveStep('review')
       setShowRawWeather(false)
       setShowAdvancedNav(false)
       setShowFaaDelayDetails(false)
@@ -719,6 +718,25 @@ function App() {
   }
 
   useEffect(() => {
+    if (activeStep === 'plan') {
+      return
+    }
+
+    if (mapRef.current) {
+      mapRef.current.remove()
+      mapRef.current = null
+    }
+
+    routeLayerRef.current = null
+    markerLayerRef.current = null
+    rasterLayerRef.current = null
+  }, [activeStep])
+
+  useEffect(() => {
+    if (activeStep !== 'plan') {
+      return
+    }
+
     const selectedSource = selectedSectionalUrl
     if (!selectedSource || routePoints.length < 2 || !mapContainerRef.current) {
       return
@@ -889,7 +907,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedSectionalUrl, routePoints])
+  }, [activeStep, selectedSectionalUrl, routePoints])
 
   return (
     <main className="app">

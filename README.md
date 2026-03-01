@@ -41,6 +41,35 @@ npm run dev
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:4000`
 
+### FAA Charts Map Route
+
+- Open `http://localhost:5173/charts` for seamless FAA chart tile browsing.
+- Layer selector includes:
+	- VFR Sectional
+	- Terminal Area Chart (TAC)
+	- IFR Low Enroute
+- Selected layer is persisted in local storage.
+
+### Environment Variables Required
+
+Create `client/.env.local`:
+
+```bash
+VITE_FAA_VFR_TILE_URL=REPLACE_WITH_FAA_VFR_TILE_ENDPOINT
+VITE_FAA_TAC_TILE_URL=REPLACE_WITH_FAA_TAC_TILE_ENDPOINT
+VITE_FAA_IFRLOW_TILE_URL=REPLACE_WITH_FAA_IFRLOW_TILE_ENDPOINT
+```
+
+Example placeholder values:
+
+```bash
+VITE_FAA_VFR_TILE_URL=REPLACE_WITH_FAA_VFR_TILE_ENDPOINT
+VITE_FAA_TAC_TILE_URL=REPLACE_WITH_FAA_TAC_TILE_ENDPOINT
+VITE_FAA_IFRLOW_TILE_URL=REPLACE_WITH_FAA_IFRLOW_TILE_ENDPOINT
+```
+
+After updating env vars, restart the frontend dev server.
+
 ## Build
 
 ```bash
