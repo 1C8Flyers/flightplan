@@ -109,6 +109,17 @@ type PrintableDiagram = {
   imageUrl: string | null
 }
 
+type RouteNavaid = {
+  ident: string
+  name: string
+  type: string
+  frequencyKhz: number | null
+  dmeFrequencyKhz: number | null
+  morse: string
+  closestDistanceNm: number
+  legIndex: number
+}
+
 type LandmarkNameResponse = {
   ident: string | null
   label: string | null
@@ -274,6 +285,7 @@ function App() {
   const [mapError, setMapError] = useState<string | null>(null)
   const [printableDiagrams, setPrintableDiagrams] = useState<PrintableDiagram[]>([])
   const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
+  const [routeNavaids, setRouteNavaids] = useState<RouteNavaid[]>([])
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
@@ -288,10 +300,6 @@ function App() {
     const totalFuel = legs.reduce((sum, leg) => sum + leg.fuelGallons, 0)
     return { totalDistance, totalTime, totalFuel }
   }, [legs])
-
-  const splitLegIndex = useMemo(() => Math.ceil(legs.length / 2), [legs.length])
-  const leftPanelLegs = useMemo(() => legs.slice(0, splitLegIndex), [legs, splitLegIndex])
-  const rightPanelLegs = useMemo(() => legs.slice(splitLegIndex), [legs, splitLegIndex])
 
   async function fetchJson<T>(path: string): Promise<T> {
     const response = await fetch(path)
@@ -360,9 +368,54 @@ function App() {
     const visibility = metar.visib ? `${metar.visib}SM` : '—'
     const temperature = metar.temp == null ? '—' : `${metar.temp}°C`
     const dewpoint = metar.dewp == null ? '—' : `${metar.dewp}°C`
-    const altimeter = metar.altim == null ? '—' : `${metar.altim.toFixed(2)} inHg`
+    const altimeter = metar.altim == null
+      ? '—'
+      : metar.altim > 200
+        ? `${(metar.altim * 0.0295299830714).toFixed(2)} inHg`
+        : `${metar.altim.toFixed(2)} inHg`
 
     return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}`
+  }
+
+  function formatFrequencyType(type: string) {
+    const normalized = type.toUpperCase()
+    if (normalized.startsWith('ATIS') || normalized.startsWith('AWOS') || normalized.startsWith('ASOS')) return 'WX'
+    if (normalized.startsWith('CTAF')) return 'CTAF'
+    if (normalized.startsWith('UNIC')) return 'UNICOM'
+    if (normalized.startsWith('TWR')) return 'TWR'
+    if (normalized.startsWith('GND')) return 'GND'
+    if (normalized.startsWith('APP')) return 'APP'
+    if (normalized.startsWith('DEP')) return 'DEP'
+    if (normalized.startsWith('CLNC')) return 'CLR'
+    if (normalized.startsWith('FSS')) return 'FSS'
+    return normalized.slice(0, 6)
+  }
+
+  function formatNavaidFrequency(navaid: RouteNavaid) {
+    if (navaid.frequencyKhz == null) {
+      return '—'
+    }
+
+    if (navaid.frequencyKhz >= 100000 || navaid.type.startsWith('VOR') || navaid.type === 'TACAN') {
+      return `${(navaid.frequencyKhz / 1000).toFixed(2)} MHz`
+    }
+
+    return `${navaid.frequencyKhz} kHz`
+  }
+
+  async function loadRouteNavaids(points: Point[]) {
+    if (points.length < 2) {
+      setRouteNavaids([])
+      return
+    }
+
+    try {
+      const pointsParam = points.map((point) => `${point.lat.toFixed(6)},${point.lon.toFixed(6)}`).join(';')
+      const response = await fetchJson<{ navaids: RouteNavaid[] }>(`/api/navaids/route?points=${encodeURIComponent(pointsParam)}`)
+      setRouteNavaids(response.navaids)
+    } catch {
+      setRouteNavaids([])
+    }
   }
 
   async function loadPrintableDiagrams(depAirportResponse: AirportResponse, arrAirportResponse: AirportResponse) {
@@ -623,7 +676,10 @@ function App() {
 
       setRoutePoints(points)
       setWaypointsInput(toWaypointInputFromRoute(points))
-      await recomputeRouteCalculations(points)
+      await Promise.all([
+        recomputeRouteCalculations(points),
+        loadRouteNavaids(points)
+      ])
     } catch (caughtError) {
       setError((caughtError as Error).message)
       setLegs([])
@@ -633,6 +689,7 @@ function App() {
       setPrintableDiagrams([])
       setDepFrequencies([])
       setArrFrequencies([])
+      setRouteNavaids([])
     } finally {
       setLoading(false)
     }
@@ -782,7 +839,10 @@ function App() {
 
               setRoutePoints(updatedPoints)
               setWaypointsInput(toWaypointInputFromRoute(updatedPoints))
-              await recomputeRouteCalculations(updatedPoints)
+              await Promise.all([
+                recomputeRouteCalculations(updatedPoints),
+                loadRouteNavaids(updatedPoints)
+              ])
             } catch (caughtError) {
               setError((caughtError as Error).message)
             }
@@ -1037,174 +1097,119 @@ function App() {
       )}
 
       {legs.length > 0 && depAirport && arrAirport && (
-        <section className="card print-packet kneeboard-packet">
-          <div className="kneeboard-fold-layout">
-            <article className="kneeboard-panel">
-              <h2 className="kneeboard-panel-title">VFR Nav Log (Panel A)</h2>
-              <p>
-                Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
-                {' · '}
-                Date: __________
-              </p>
-              <p>
-                Aircraft: __________ {' · '}
-                Tail #: __________
-              </p>
-              <p>
-                TAS {tas} kts · Alt {cruiseAltitudeFt} ft · Burn {fuelBurn} gph
-              </p>
+        <section className="card print-packet">
+          <article className="flight-plan-page">
+            <h2>VFR Flight Plan Data</h2>
+            <p>
+              Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
+              {' · '}Date: __________{' · '}Aircraft: __________{' · '}Tail #: __________
+            </p>
+            <p>
+              TAS {tas} kts · Cruise {cruiseAltitudeFt} ft · Fuel Burn {fuelBurn} gph ·
+              Totals: {totals.totalDistance.toFixed(1)} NM / {totals.totalTime.toFixed(1)} min / {totals.totalFuel.toFixed(2)} gal
+            </p>
 
-              <div className="kneeboard-meta-grid">
-                <article>
-                  <h3>Departure {depAirport.airport.icao}</h3>
-                  <p>{formatDecodedWeather(depWeather)}</p>
-                  <p><strong>Frequencies:</strong></p>
-                  {depFrequencies.length > 0 ? (
-                    <ul className="freq-list">
-                      {depFrequencies.slice(0, 8).map((frequency) => (
-                        <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
-                          {frequency.type}: {frequency.frequencyMHz}
-                          {frequency.description ? ` (${frequency.description})` : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>Frequency data unavailable.</p>
-                  )}
-                </article>
-              </div>
+            <div className="print-summary-grid">
+              <article>
+                <h3>Departure {depAirport.airport.icao}</h3>
+                <p>{formatDecodedWeather(depWeather)}</p>
+                <ul className="freq-list">
+                  {depFrequencies.slice(0, 10).map((frequency) => (
+                    <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
+                      {formatFrequencyType(frequency.type)}: {frequency.frequencyMHz}
+                    </li>
+                  ))}
+                </ul>
+              </article>
+              <article>
+                <h3>Arrival {arrAirport.airport.icao}</h3>
+                <p>{formatDecodedWeather(arrWeather)}</p>
+                <ul className="freq-list">
+                  {arrFrequencies.slice(0, 10).map((frequency) => (
+                    <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
+                      {formatFrequencyType(frequency.type)}: {frequency.frequencyMHz}
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            </div>
 
-              <table className="print-navlog-table">
+            <table className="print-navlog-table">
+              <thead>
+                <tr>
+                  <th>Leg</th>
+                  <th>From→To</th>
+                  <th>TC</th>
+                  <th>MH</th>
+                  <th>CH</th>
+                  <th>Dist</th>
+                  <th>ETE</th>
+                  <th>ATD</th>
+                  <th>ATA</th>
+                  <th>Fuel</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {legs.map((leg, index) => (
+                  <tr key={`print-leg-${leg.from}-${leg.to}-${index}`}>
+                    <td>{index + 1}</td>
+                    <td>{leg.from}→{leg.to}</td>
+                    <td>{leg.trueCourse.toFixed(0)}°</td>
+                    <td>{leg.magneticHeading.toFixed(0)}°</td>
+                    <td>{leg.compassHeading.toFixed(0)}°</td>
+                    <td>{leg.distanceNm.toFixed(1)}</td>
+                    <td>{leg.eteMinutes.toFixed(1)}</td>
+                    <td className="write-cell" />
+                    <td className="write-cell" />
+                    <td className="write-cell" />
+                    <td className="write-cell notes-cell" />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <h3>Route Navaids (with Morse)</h3>
+            {routeNavaids.length > 0 ? (
+              <table className="print-navlog-table navaid-table">
                 <thead>
                   <tr>
                     <th>Leg</th>
-                    <th>From</th>
-                    <th>To</th>
-                    <th>TC</th>
-                    <th>MH</th>
-                    <th>Dist</th>
-                    <th>GS</th>
-                    <th>ETE</th>
-                    <th>ATD</th>
-                    <th>ATA</th>
-                    <th>Act GS</th>
-                    <th>Fuel</th>
-                    <th>Notes</th>
+                    <th>Ident</th>
+                    <th>Type</th>
+                    <th>Frequency</th>
+                    <th>Morse (Ident)</th>
+                    <th>Name</th>
+                    <th>Off Route</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {leftPanelLegs.map((leg, index) => (
-                    <tr key={`print-left-${leg.from}-${leg.to}-${index}`}>
-                      <td>{index + 1}</td>
-                      <td>{leg.from}</td>
-                      <td>{leg.to}</td>
-                      <td>{leg.trueCourse.toFixed(0)}°</td>
-                      <td>{leg.magneticHeading.toFixed(0)}°</td>
-                      <td>{leg.distanceNm.toFixed(1)}</td>
-                      <td>{leg.groundSpeed.toFixed(0)}</td>
-                      <td>{leg.eteMinutes.toFixed(1)}</td>
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell notes-cell" />
+                  {routeNavaids.map((navaid) => (
+                    <tr key={`navaid-${navaid.ident}-${navaid.legIndex}`}>
+                      <td>{navaid.legIndex}</td>
+                      <td>{navaid.ident}</td>
+                      <td>{navaid.type}</td>
+                      <td>{formatNavaidFrequency(navaid)}</td>
+                      <td>{navaid.morse || '—'}</td>
+                      <td>{navaid.name}</td>
+                      <td>{navaid.closestDistanceNm.toFixed(1)} NM</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            ) : (
+              <p>No route navaids identified.</p>
+            )}
+          </article>
 
-              <div className="print-notes-grid">
-                <div className="write-block">
-                  <strong>Preflight / Departure Notes</strong>
-                </div>
-              </div>
-            </article>
-
-            <article className="kneeboard-panel">
-              <h2 className="kneeboard-panel-title">VFR Nav Log (Panel B)</h2>
-              <p>
-                Totals: {totals.totalDistance.toFixed(1)} NM · {totals.totalTime.toFixed(1)} min · {totals.totalFuel.toFixed(2)} gal
-              </p>
-              <p>
-                Start Hobbs: ______ · End Hobbs: ______ · Fuel On Board: ______
-              </p>
-
-              <div className="kneeboard-meta-grid">
-                <article>
-                  <h3>Arrival {arrAirport.airport.icao}</h3>
-                  <p>{formatDecodedWeather(arrWeather)}</p>
-                  <p><strong>Frequencies:</strong></p>
-                  {arrFrequencies.length > 0 ? (
-                    <ul className="freq-list">
-                      {arrFrequencies.slice(0, 8).map((frequency) => (
-                        <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
-                          {frequency.type}: {frequency.frequencyMHz}
-                          {frequency.description ? ` (${frequency.description})` : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>Frequency data unavailable.</p>
-                  )}
-                </article>
-              </div>
-
-              <table className="print-navlog-table">
-                <thead>
-                  <tr>
-                    <th>Leg</th>
-                    <th>From</th>
-                    <th>To</th>
-                    <th>TC</th>
-                    <th>MH</th>
-                    <th>Dist</th>
-                    <th>GS</th>
-                    <th>ETE</th>
-                    <th>ATD</th>
-                    <th>ATA</th>
-                    <th>Act GS</th>
-                    <th>Fuel</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rightPanelLegs.map((leg, index) => (
-                    <tr key={`print-right-${leg.from}-${leg.to}-${index}`}>
-                      <td>{splitLegIndex + index + 1}</td>
-                      <td>{leg.from}</td>
-                      <td>{leg.to}</td>
-                      <td>{leg.trueCourse.toFixed(0)}°</td>
-                      <td>{leg.magneticHeading.toFixed(0)}°</td>
-                      <td>{leg.distanceNm.toFixed(1)}</td>
-                      <td>{leg.groundSpeed.toFixed(0)}</td>
-                      <td>{leg.eteMinutes.toFixed(1)}</td>
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell" />
-                      <td className="write-cell notes-cell" />
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              <div className="print-notes-grid">
-                <div className="write-block">
-                  <strong>Enroute / Arrival Notes</strong>
-                </div>
-              </div>
-            </article>
-          </div>
-
-          <h3>Departure and Arrival Airport Diagrams</h3>
           {printDiagramsLoading && <p>Loading airport diagrams...</p>}
           {!printDiagramsLoading && printableDiagrams.length === 0 && (
             <p>Airport diagrams unavailable for this route.</p>
           )}
 
-          <div className="print-charts-grid">
+          <div className="print-charts-grid charts-two-up">
             {printableDiagrams.map((chart) => (
-              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item diagram-page">
+              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
                 <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
                 <p>{chart.chartName}</p>
                 {chart.imageUrl ? (

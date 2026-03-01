@@ -171,6 +171,29 @@ th {
   margin-top: 1rem;
 }
 
+.flight-plan-page {
+  border: 1px solid #d3d3d3;
+  border-radius: 8px;
+  padding: 0.65rem;
+}
+
+.print-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+}
+
+.print-summary-grid article {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.4rem;
+}
+
+.navaid-table {
+  margin-top: 0.4rem;
+}
+
 .kneeboard-fold-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -212,8 +235,12 @@ th {
 
 .freq-list {
   margin: 0.2rem 0 0;
-  padding-left: 1rem;
+  padding-left: 0;
   font-size: 0.84rem;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.1rem 0.5rem;
 }
 
 .freq-list li {
@@ -225,13 +252,13 @@ th {
 }
 
 .write-cell {
-  min-width: 58px;
+  min-width: 42px;
   height: 26px;
   background: #fff;
 }
 
 .notes-cell {
-  min-width: 180px;
+  min-width: 120px;
 }
 
 .print-notes-grid {
@@ -246,6 +273,23 @@ th {
   border-radius: 8px;
   min-height: 120px;
   padding: 0.45rem;
+}
+
+.kneeboard-ops-block {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.panel-notes-block {
+  margin-top: 0.45rem;
+  min-height: 84px;
+}
+
+.kneeboard-ops-block p {
+  margin: 0.2rem 0;
+  font-size: 0.84rem;
 }
 
 .print-charts-grid {
@@ -273,10 +317,13 @@ th {
 }
 
 .print-diagram-image {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   border: 1px solid #ddd;
   border-radius: 6px;
   background: #fff;
+  display: block;
+  margin: 0 auto;
 }
 
 @media (max-width: 760px) {
@@ -293,6 +340,10 @@ th {
   }
 
   .kneeboard-fold-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .print-summary-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -318,7 +369,43 @@ th {
     border: none;
     padding: 0;
     margin: 0;
-    break-inside: avoid;
+    break-inside: auto;
+  }
+
+  .flight-plan-page {
+    border: 1px solid #777;
+    border-radius: 0;
+    padding: 0.12in;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .flight-plan-page h2 {
+    font-size: 12px;
+    margin: 0 0 0.08in;
+  }
+
+  .flight-plan-page h3 {
+    font-size: 10px;
+    margin: 0.08in 0 0.04in;
+  }
+
+  .flight-plan-page p {
+    margin: 0.03in 0;
+    font-size: 8px;
+    line-height: 1.25;
+  }
+
+  .print-summary-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.08in;
+    margin: 0.08in 0;
+  }
+
+  .print-summary-grid article {
+    border: 1px solid #777;
+    border-radius: 0;
+    padding: 0.06in;
   }
 
   .kneeboard-fold-layout {
@@ -331,7 +418,6 @@ th {
     border: 1px solid #777;
     border-radius: 0;
     padding: 0.12in;
-    min-height: 7.9in;
     break-inside: avoid;
   }
 
@@ -347,18 +433,35 @@ th {
   }
 
   .print-navlog-table {
-    font-size: 8.2px;
+    font-size: 7.8px;
     margin-top: 0.06in;
+    table-layout: fixed;
   }
 
   .print-navlog-table th,
   .print-navlog-table td {
     border: 1px solid #777;
-    padding: 0.2rem;
+    padding: 0.08rem;
+    vertical-align: middle;
+  }
+
+  .print-navlog-table th:nth-child(2),
+  .print-navlog-table td:nth-child(2) {
+    width: 20%;
+  }
+
+  .print-navlog-table th:last-child,
+  .print-navlog-table td:last-child {
+    width: 20%;
   }
 
   .write-cell {
-    height: 14px;
+    min-width: 0;
+    height: 12px;
+  }
+
+  .notes-cell {
+    min-width: 0;
   }
 
   .write-block {
@@ -368,8 +471,41 @@ th {
     padding: 0.08in;
   }
 
+  .kneeboard-ops-block {
+    border: 1px solid #777;
+    border-radius: 0;
+    margin-top: 0.08in;
+    padding: 0.08in;
+  }
+
+  .kneeboard-ops-block p {
+    margin: 0.03in 0;
+    font-size: 7.5px;
+  }
+
+  .panel-notes-block {
+    margin-top: 0.08in;
+    min-height: 0.8in;
+    border: 1px solid #777;
+    border-radius: 0;
+    padding: 0.08in;
+  }
+
+  .charts-two-up {
+    break-before: page;
+    page-break-before: always;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.12in;
+    align-items: start;
+  }
+
   .print-chart-item {
     break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid #777;
+    border-radius: 0;
+    padding: 0.08in;
   }
 
   .kneeboard-meta-grid {
@@ -397,12 +533,15 @@ th {
     line-height: 1.2;
   }
 
-  .diagram-page {
-    break-before: page;
+  .freq-list {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.02in 0.08in;
   }
 
   .print-diagram-image {
-    max-height: 7.9in;
+    width: 100%;
+    height: auto;
+    max-height: 6.7in;
     object-fit: contain;
     border: 1px solid #777;
   }

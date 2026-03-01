@@ -82,6 +82,8 @@ type NavaidRecord = {
   type: string
   lat: number
   lon: number
+  frequencyKhz: number | null
+  dmeFrequencyKhz: number | null
 }
 
 type AirportFrequencyRecord = {
@@ -346,6 +348,8 @@ async function fetchNavaidsDataset() {
   const typeIndex = headers.indexOf('type')
   const latIndex = headers.indexOf('latitude_deg')
   const lonIndex = headers.indexOf('longitude_deg')
+  const frequencyKhzIndex = headers.indexOf('frequency_khz')
+  const dmeFrequencyKhzIndex = headers.indexOf('dme_frequency_khz')
 
   const navaids: NavaidRecord[] = []
   for (let index = 1; index < rows.length; index += 1) {
@@ -360,12 +364,22 @@ async function fetchNavaidsDataset() {
     const type = (cols[typeIndex] ?? '').trim().toUpperCase()
     const lat = Number(cols[latIndex])
     const lon = Number(cols[lonIndex])
+    const frequencyKhz = cols[frequencyKhzIndex] ? Number(cols[frequencyKhzIndex]) : null
+    const dmeFrequencyKhz = cols[dmeFrequencyKhzIndex] ? Number(cols[dmeFrequencyKhzIndex]) : null
 
     if (!ident || !name || Number.isNaN(lat) || Number.isNaN(lon)) {
       continue
     }
 
-    navaids.push({ ident, name, type, lat, lon })
+    navaids.push({
+      ident,
+      name,
+      type,
+      lat,
+      lon,
+      frequencyKhz: frequencyKhz != null && !Number.isNaN(frequencyKhz) ? frequencyKhz : null,
+      dmeFrequencyKhz: dmeFrequencyKhz != null && !Number.isNaN(dmeFrequencyKhz) ? dmeFrequencyKhz : null
+    })
   }
 
   navaidCache = { loadedAt: Date.now(), navaids }
@@ -440,6 +454,26 @@ function rankFrequencyType(type: string) {
 
   const index = order.findIndex((item) => type.startsWith(item))
   return index === -1 ? order.length : index
+}
+
+function isMilitaryFrequency(type: string, description: string, frequencyMHzText: string) {
+  const normalizedType = type.toUpperCase()
+  const normalizedDescription = description.toUpperCase()
+  const frequencyMHz = Number(frequencyMHzText)
+
+  if (normalizedType.includes('MIL') || normalizedDescription.includes('MILITARY')) {
+    return true
+  }
+
+  if (normalizedDescription.includes('UHF') || normalizedDescription.includes('TACAN')) {
+    return true
+  }
+
+  if (!Number.isNaN(frequencyMHz) && frequencyMHz >= 137) {
+    return true
+  }
+
+  return false
 }
 
 function getAirportCodeCandidates(code: string) {
@@ -740,6 +774,82 @@ async function fetchAirportDiagram(icaoCode: string) {
   return selected
 }
 
+function toMorsePattern(value: string) {
+  const morseMap: Record<string, string> = {
+    A: '.-', B: '-...', C: '-.-.', D: '-..', E: '.', F: '..-.', G: '--.', H: '....', I: '..', J: '.---',
+    K: '-.-', L: '.-..', M: '--', N: '-.', O: '---', P: '.--.', Q: '--.-', R: '.-.', S: '...', T: '-',
+    U: '..-', V: '...-', W: '.--', X: '-..-', Y: '-.--', Z: '--..',
+    0: '-----', 1: '.----', 2: '..---', 3: '...--', 4: '....-', 5: '.....',
+    6: '-....', 7: '--...', 8: '---..', 9: '----.'
+  }
+
+  return value
+    .toUpperCase()
+    .split('')
+    .map((char) => morseMap[char] ?? '')
+    .filter(Boolean)
+    .join(' ')
+}
+
+function selectRouteNavaids(routePoints: Array<{ lat: number; lon: number }>, navaids: NavaidRecord[]) {
+  if (routePoints.length < 2) {
+    return []
+  }
+
+  const allowedTypes = new Set(['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'])
+  const byIdent = new Map<string, {
+    ident: string
+    name: string
+    type: string
+    frequencyKhz: number | null
+    dmeFrequencyKhz: number | null
+    morse: string
+    closestDistanceNm: number
+    legIndex: number
+  }>()
+
+  for (let legIndex = 0; legIndex < routePoints.length - 1; legIndex += 1) {
+    const dep = routePoints[legIndex]
+    const arr = routePoints[legIndex + 1]
+
+    const legCandidates = navaids
+      .filter((navaid) => allowedTypes.has(navaid.type))
+      .filter((navaid) => navaid.frequencyKhz != null)
+      .map((navaid) => {
+        const projection = routeProjection(dep.lat, dep.lon, arr.lat, arr.lon, navaid.lat, navaid.lon)
+        return {
+          ...navaid,
+          progress: projection.progress,
+          crossTrackNm: projection.crossTrackNm
+        }
+      })
+      .filter((candidate) => candidate.progress >= 0 && candidate.progress <= 1)
+      .filter((candidate) => candidate.crossTrackNm <= 30)
+      .sort((a, b) => a.crossTrackNm - b.crossTrackNm)
+      .slice(0, 6)
+
+    for (const candidate of legCandidates) {
+      const existing = byIdent.get(candidate.ident)
+      if (!existing || candidate.crossTrackNm < existing.closestDistanceNm) {
+        byIdent.set(candidate.ident, {
+          ident: candidate.ident,
+          name: candidate.name,
+          type: candidate.type,
+          frequencyKhz: candidate.frequencyKhz,
+          dmeFrequencyKhz: candidate.dmeFrequencyKhz,
+          morse: toMorsePattern(candidate.ident),
+          closestDistanceNm: Number(candidate.crossTrackNm.toFixed(1)),
+          legIndex: legIndex + 1
+        })
+      }
+    }
+  }
+
+  return [...byIdent.values()]
+    .sort((a, b) => a.legIndex - b.legIndex || a.closestDistanceNm - b.closestDistanceNm)
+    .slice(0, 16)
+}
+
 function selectSuggestedWaypoints(depLat: number, depLon: number, arrLat: number, arrLon: number, airports: AirportRecord[]) {
   const routeAirportPool = airports.filter((airport) =>
     ['small_airport', 'medium_airport', 'large_airport'].includes(airport.type)
@@ -1000,6 +1110,7 @@ app.get('/api/frequencies/:icao', async (req, res) => {
 
     const matches = allFrequencies
       .filter((frequency) => candidates.includes(frequency.airportIdent))
+      .filter((frequency) => !isMilitaryFrequency(frequency.type, frequency.description, frequency.frequencyMHz))
       .map((frequency) => ({
         type: frequency.type,
         description: frequency.description,
@@ -1056,6 +1167,40 @@ app.get('/api/sectionals', async (_req, res) => {
   try {
     const sectionals = await fetchSectionalCharts()
     res.json({ sectionals })
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+})
+
+app.get('/api/navaids/route', async (req, res) => {
+  try {
+    const rawPoints = String(req.query.points ?? '').trim()
+    if (!rawPoints) {
+      res.status(400).json({ error: 'points query is required.' })
+      return
+    }
+
+    const routePoints = rawPoints
+      .split(';')
+      .map((pair) => pair.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const [latText, lonText] = pair.split(',').map((value) => value.trim())
+        const lat = Number(latText)
+        const lon = Number(lonText)
+        return { lat, lon }
+      })
+      .filter((point) => !Number.isNaN(point.lat) && !Number.isNaN(point.lon))
+
+    if (routePoints.length < 2) {
+      res.status(400).json({ error: 'At least two valid points are required.' })
+      return
+    }
+
+    const navaids = await fetchNavaidsDataset()
+    const routeNavaids = selectRouteNavaids(routePoints, navaids)
+
+    res.json({ navaids: routeNavaids })
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })
   }

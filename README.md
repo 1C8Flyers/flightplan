@@ -13,7 +13,9 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 - FAA sectional chart selector + route overlay map
 - Printable in-flight nav log packet with write-in fields (ATD/ATA/actual GS/fuel/notes), formatted for kneeboard size
 - Printable packet includes departure/arrival frequencies and decoded METAR summary
+- Printable full-page landscape flight plan data sheet with route navaids and morse patterns
 - Printable departure and arrival airport diagrams (APD)
+- Airport diagrams print two per page side-by-side
 - Automatic ETE and fuel estimates by leg and totals
 
 ## Data Sources
