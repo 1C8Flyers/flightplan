@@ -268,6 +268,16 @@ function App() {
   const [fuelBurn, setFuelBurn] = useState(9)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeStep, setActiveStep] = useState<'plan' | 'review' | 'print'>('plan')
+  const [showRawWeather, setShowRawWeather] = useState(false)
+  const [showAdvancedNav, setShowAdvancedNav] = useState(false)
+  const [showFaaDelayDetails, setShowFaaDelayDetails] = useState(false)
+  const [reviewChecklist, setReviewChecklist] = useState({
+    weatherBriefed: false,
+    fuelChecked: false,
+    alternatesReviewed: false,
+    notamsReviewed: false
+  })
 
   const [depAirport, setDepAirport] = useState<AirportResponse | null>(null)
   const [arrAirport, setArrAirport] = useState<AirportResponse | null>(null)
@@ -300,6 +310,8 @@ function App() {
     const totalFuel = legs.reduce((sum, leg) => sum + leg.fuelGallons, 0)
     return { totalDistance, totalTime, totalFuel }
   }, [legs])
+
+  const hasNavData = Boolean(legs.length > 0 && depAirport && arrAirport)
 
   async function fetchJson<T>(path: string): Promise<T> {
     const response = await fetch(path)
@@ -680,6 +692,17 @@ function App() {
         recomputeRouteCalculations(points),
         loadRouteNavaids(points)
       ])
+
+      setActiveStep('review')
+      setShowRawWeather(false)
+      setShowAdvancedNav(false)
+      setShowFaaDelayDetails(false)
+      setReviewChecklist({
+        weatherBriefed: false,
+        fuelChecked: false,
+        alternatesReviewed: false,
+        notamsReviewed: false
+      })
     } catch (caughtError) {
       setError((caughtError as Error).message)
       setLegs([])
@@ -873,7 +896,27 @@ function App() {
       <h1 className="screen-only">VFR Nav Log Builder</h1>
       <p className="subtitle screen-only">Build a pilot nav log with live airport, weather, and FAA status data.</p>
 
-      <section className="card screen-only">
+      <section className="card screen-only step-nav-card">
+        <div className="step-nav" role="tablist" aria-label="Planner steps">
+          <button type="button" className={activeStep === 'plan' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('plan')}>Plan</button>
+          <button type="button" className={activeStep === 'review' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('review')} disabled={!hasNavData}>Review</button>
+          <button type="button" className={activeStep === 'print' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('print')} disabled={!hasNavData}>Print</button>
+        </div>
+      </section>
+
+      {hasNavData && depAirport && arrAirport && (
+        <section className="card screen-only summary-card">
+          <p>
+            {depAirport.airport.icao} → {arrAirport.airport.icao}
+            {' · '}TAS {tas} kt
+            {' · '}Cruise {cruiseAltitudeFt} ft
+            {' · '}Total {totals.totalDistance.toFixed(1)} NM / {totals.totalTime.toFixed(1)} min / {totals.totalFuel.toFixed(2)} gal
+          </p>
+        </section>
+      )}
+
+      {activeStep === 'plan' && (
+        <section className="card screen-only">
         <h2>Flight Setup</h2>
         <div className="grid">
           <label>
@@ -924,10 +967,16 @@ function App() {
             Print Nav Log Packet
           </button>
         )}
+        {legs.length > 0 && (
+          <button className="print-button secondary" onClick={() => setActiveStep('print')} type="button">
+            Open Print View
+          </button>
+        )}
         {error && <p className="error">{error}</p>}
       </section>
+      )}
 
-      {suggestedWaypoints.length > 0 && (
+      {activeStep === 'plan' && suggestedWaypoints.length > 0 && (
         <section className="card screen-only">
           <h2>Suggested Enroute Waypoints</h2>
           <p className="subtitle">Real airport checkpoints near your route corridor.</p>
@@ -944,7 +993,7 @@ function App() {
         </section>
       )}
 
-      {windsAloft && (
+      {activeStep === 'review' && windsAloft && (
         <section className="card screen-only">
           <h2>Winds Aloft (Live)</h2>
           <p>
@@ -958,19 +1007,69 @@ function App() {
         </section>
       )}
 
-      {depAirport && arrAirport && (
+      {activeStep === 'review' && hasNavData && (
+        <section className="card screen-only">
+          <h2>Review Checklist</h2>
+          <div className="review-checklist">
+            <label className="review-checkitem">
+              <input
+                type="checkbox"
+                checked={reviewChecklist.weatherBriefed}
+                onChange={(event) => setReviewChecklist((current) => ({ ...current, weatherBriefed: event.target.checked }))}
+              />
+              Weather briefing reviewed
+            </label>
+            <label className="review-checkitem">
+              <input
+                type="checkbox"
+                checked={reviewChecklist.fuelChecked}
+                onChange={(event) => setReviewChecklist((current) => ({ ...current, fuelChecked: event.target.checked }))}
+              />
+              Fuel plan verified
+            </label>
+            <label className="review-checkitem">
+              <input
+                type="checkbox"
+                checked={reviewChecklist.alternatesReviewed}
+                onChange={(event) => setReviewChecklist((current) => ({ ...current, alternatesReviewed: event.target.checked }))}
+              />
+              Alternate options reviewed
+            </label>
+            <label className="review-checkitem">
+              <input
+                type="checkbox"
+                checked={reviewChecklist.notamsReviewed}
+                onChange={(event) => setReviewChecklist((current) => ({ ...current, notamsReviewed: event.target.checked }))}
+              />
+              NOTAMs reviewed
+            </label>
+          </div>
+        </section>
+      )}
+
+      {activeStep === 'review' && depAirport && arrAirport && (
         <section className="card screen-only">
           <h2>Airport + FAA Status</h2>
+          {(depAirport.faa.hasDelay || arrAirport.faa.hasDelay) && (
+            <div className="review-actions">
+              <button type="button" className="review-toggle" onClick={() => setShowFaaDelayDetails((current) => !current)}>
+                {showFaaDelayDetails ? 'Hide FAA Delay Details' : 'Show FAA Delay Details'}
+              </button>
+            </div>
+          )}
           <div className="columns">
             <article>
               <h3>{depAirport.airport.icao} — {depAirport.airport.name}</h3>
               <p>{depAirport.airport.lat.toFixed(4)}, {depAirport.airport.lon.toFixed(4)}</p>
               {depAirport.faa.hasDelay ? (
-                depAirport.faa.delays.map((delay) => (
-                  <p key={`${delay.airportCode}-${delay.reason}`}>
-                    FAA Delay: {delay.type} {delay.minMinutes}-{delay.maxMinutes} ({delay.reason})
-                  </p>
-                ))
+                <>
+                  <p>FAA Delay: {depAirport.faa.delays.length} active</p>
+                  {showFaaDelayDetails && depAirport.faa.delays.map((delay) => (
+                    <p key={`${delay.airportCode}-${delay.reason}`}>
+                      {delay.type} {delay.minMinutes}-{delay.maxMinutes} min ({delay.reason})
+                    </p>
+                  ))}
+                </>
               ) : (
                 <p>FAA Delay: None reported</p>
               )}
@@ -979,11 +1078,14 @@ function App() {
               <h3>{arrAirport.airport.icao} — {arrAirport.airport.name}</h3>
               <p>{arrAirport.airport.lat.toFixed(4)}, {arrAirport.airport.lon.toFixed(4)}</p>
               {arrAirport.faa.hasDelay ? (
-                arrAirport.faa.delays.map((delay) => (
-                  <p key={`${delay.airportCode}-${delay.reason}`}>
-                    FAA Delay: {delay.type} {delay.minMinutes}-{delay.maxMinutes} ({delay.reason})
-                  </p>
-                ))
+                <>
+                  <p>FAA Delay: {arrAirport.faa.delays.length} active</p>
+                  {showFaaDelayDetails && arrAirport.faa.delays.map((delay) => (
+                    <p key={`${delay.airportCode}-${delay.reason}`}>
+                      {delay.type} {delay.minMinutes}-{delay.maxMinutes} min ({delay.reason})
+                    </p>
+                  ))}
+                </>
               ) : (
                 <p>FAA Delay: None reported</p>
               )}
@@ -992,67 +1094,109 @@ function App() {
         </section>
       )}
 
-      {(depWeather || arrWeather) && (
+      {activeStep === 'review' && (depWeather || arrWeather) && (
         <section className="card screen-only">
           <h2>Weather</h2>
+          <div className="review-actions">
+            <button type="button" className="review-toggle" onClick={() => setShowRawWeather((current) => !current)}>
+              {showRawWeather ? 'Hide Raw METAR/TAF' : 'Show Raw METAR/TAF'}
+            </button>
+          </div>
           <div className="columns weather">
             <article>
               <h3>{departure.toUpperCase()}</h3>
               <p><strong>Source:</strong> {depWeather?.sourceStation ?? 'N/A'}{depWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
-              <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>
-              <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>
+              <p><strong>Decoded:</strong> {formatDecodedWeather(depWeather)}</p>
+              {showRawWeather && <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>}
+              {showRawWeather && <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>}
             </article>
             <article>
               <h3>{arrival.toUpperCase()}</h3>
               <p><strong>Source:</strong> {arrWeather?.sourceStation ?? 'N/A'}{arrWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
-              <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>
-              <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>
+              <p><strong>Decoded:</strong> {formatDecodedWeather(arrWeather)}</p>
+              {showRawWeather && <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>}
+              {showRawWeather && <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>}
             </article>
           </div>
         </section>
       )}
 
-      {legs.length > 0 && (
+      {activeStep === 'review' && legs.length > 0 && (
         <section className="card screen-only">
           <h2>Nav Log Legs</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>From</th>
-                <th>To</th>
-                <th>Dist (NM)</th>
-                <th>TC</th>
-                <th>Var</th>
-                <th>Wind</th>
-                <th>WCA</th>
-                <th>TH</th>
-                <th>MH</th>
-                <th>CH</th>
-                <th>GS</th>
-                <th>ETE (min)</th>
-                <th>Fuel (gal)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {legs.map((leg) => (
-                <tr key={`${leg.from}-${leg.to}`}>
-                  <td>{leg.from} ({leg.fromLat.toFixed(4)}, {leg.fromLon.toFixed(4)})</td>
-                  <td>{leg.to} ({leg.toLat.toFixed(4)}, {leg.toLon.toFixed(4)})</td>
-                  <td>{leg.distanceNm.toFixed(1)}</td>
-                  <td>{leg.trueCourse.toFixed(0)}°</td>
-                  <td>{leg.magneticVariation.toFixed(1)}°</td>
-                  <td>{leg.windDirection == null ? 'VRB' : `${leg.windDirection}°`}/{leg.windSpeed} ({leg.windStation})</td>
-                  <td>{leg.windCorrection.toFixed(0)}°</td>
-                  <td>{leg.trueHeading.toFixed(0)}°</td>
-                  <td>{leg.magneticHeading.toFixed(0)}°</td>
-                  <td>{leg.compassHeading.toFixed(0)}°</td>
-                  <td>{leg.groundSpeed.toFixed(0)}</td>
-                  <td>{leg.eteMinutes.toFixed(1)}</td>
-                  <td>{leg.fuelGallons.toFixed(2)}</td>
+          <div className="review-actions">
+            <button type="button" className="review-toggle" onClick={() => setShowAdvancedNav((current) => !current)}>
+              {showAdvancedNav ? 'Show Compact View' : 'Show Advanced Nav Math'}
+            </button>
+          </div>
+
+          {showAdvancedNav ? (
+            <table>
+              <thead>
+                <tr>
+                  <th>From</th>
+                  <th>To</th>
+                  <th>Dist (NM)</th>
+                  <th>TC</th>
+                  <th>Var</th>
+                  <th>Wind</th>
+                  <th>WCA</th>
+                  <th>TH</th>
+                  <th>MH</th>
+                  <th>CH</th>
+                  <th>GS</th>
+                  <th>ETE (min)</th>
+                  <th>Fuel (gal)</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {legs.map((leg) => (
+                  <tr key={`${leg.from}-${leg.to}`}>
+                    <td>{leg.from} ({leg.fromLat.toFixed(4)}, {leg.fromLon.toFixed(4)})</td>
+                    <td>{leg.to} ({leg.toLat.toFixed(4)}, {leg.toLon.toFixed(4)})</td>
+                    <td>{leg.distanceNm.toFixed(1)}</td>
+                    <td>{leg.trueCourse.toFixed(0)}°</td>
+                    <td>{leg.magneticVariation.toFixed(1)}°</td>
+                    <td>{leg.windDirection == null ? 'VRB' : `${leg.windDirection}°`}/{leg.windSpeed} ({leg.windStation})</td>
+                    <td>{leg.windCorrection.toFixed(0)}°</td>
+                    <td>{leg.trueHeading.toFixed(0)}°</td>
+                    <td>{leg.magneticHeading.toFixed(0)}°</td>
+                    <td>{leg.compassHeading.toFixed(0)}°</td>
+                    <td>{leg.groundSpeed.toFixed(0)}</td>
+                    <td>{leg.eteMinutes.toFixed(1)}</td>
+                    <td>{leg.fuelGallons.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Leg</th>
+                  <th>Route</th>
+                  <th>CH</th>
+                  <th>Dist (NM)</th>
+                  <th>GS</th>
+                  <th>ETE (min)</th>
+                  <th>Fuel (gal)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {legs.map((leg, index) => (
+                  <tr key={`compact-${leg.from}-${leg.to}`}>
+                    <td>{index + 1}</td>
+                    <td>{leg.from} → {leg.to}</td>
+                    <td>{leg.compassHeading.toFixed(0)}°</td>
+                    <td>{leg.distanceNm.toFixed(1)}</td>
+                    <td>{leg.groundSpeed.toFixed(0)}</td>
+                    <td>{leg.eteMinutes.toFixed(1)}</td>
+                    <td>{leg.fuelGallons.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
 
           <p className="totals">
             Total Distance: {totals.totalDistance.toFixed(1)} NM · Total Time: {totals.totalTime.toFixed(1)} min · Total Fuel: {totals.totalFuel.toFixed(2)} gal
@@ -1064,7 +1208,7 @@ function App() {
         </section>
       )}
 
-      {sectionals.length > 0 && (
+      {activeStep === 'plan' && sectionals.length > 0 && (
         <section className="card screen-only">
           <h2>FAA Sectional Chart + Route Overlay</h2>
           <label>
@@ -1096,8 +1240,11 @@ function App() {
         </section>
       )}
 
-      {legs.length > 0 && depAirport && arrAirport && (
+      {activeStep === 'print' && legs.length > 0 && depAirport && arrAirport && (
         <section className="card print-packet">
+          <div className="screen-only print-actions">
+            <button type="button" onClick={() => window.print()}>Print Packet</button>
+          </div>
           <article className="flight-plan-page">
             <h2>VFR Flight Plan Data</h2>
             <p>

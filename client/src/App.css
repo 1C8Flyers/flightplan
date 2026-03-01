@@ -54,6 +54,92 @@ button {
   margin-left: 0.6rem;
 }
 
+.print-button.secondary {
+  background: #455a7a;
+}
+
+.step-nav-card {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 10;
+}
+
+.step-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.step-button {
+  background: #dfe7f5;
+  color: #123;
+  border: 1px solid #c5d1e8;
+  padding: 0.45rem 0.8rem;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.step-button.active {
+  background: #0d47a1;
+  color: #fff;
+  border-color: #0d47a1;
+}
+
+.step-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.summary-card {
+  padding: 0.7rem 1rem;
+}
+
+.summary-card p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.review-actions {
+  margin-bottom: 0.65rem;
+}
+
+.review-toggle {
+  background: #eceff5;
+  color: #1d2b46;
+  border: 1px solid #c9d5eb;
+  font-weight: 600;
+}
+
+.review-toggle:hover {
+  background: #dfe7f7;
+}
+
+.review-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+
+.review-checkitem {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #d5deee;
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  background: #f8fbff;
+  font-size: 0.92rem;
+}
+
+.review-checkitem input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+}
+
+.print-actions {
+  margin-bottom: 0.6rem;
+}
+
 button:disabled {
   background: #7f9ac7;
 }
@@ -333,6 +419,10 @@ th {
 
   .print-notes-grid {
     grid-template-columns: 1fr;
+  }
+
+  .step-nav {
+    flex-wrap: wrap;
   }
 
   .kneeboard-meta-grid {
