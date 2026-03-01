@@ -73,12 +73,21 @@ type SectionalOverlayMetadata = {
   imageUrl: string
 }
 
-type PrintableChart = {
+type AirportDiagramResponse = {
+  diagram: {
+    icao: string
+    faa: string | null
+    chartName: string
+    pdfUrl: string
+    proxiedPdfUrl: string
+  } | null
+}
+
+type PrintableDiagram = {
   role: 'Departure' | 'Arrival'
   airportIcao: string
   chartName: string
-  effectiveDate: string
-  imageUrl: string
+  pdfUrl: string
 }
 
 type LandmarkNameResponse = {
@@ -242,8 +251,8 @@ function App() {
   const [routePoints, setRoutePoints] = useState<Point[]>([])
   const [mapLoading, setMapLoading] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
-  const [printableCharts, setPrintableCharts] = useState<PrintableChart[]>([])
-  const [printChartsLoading, setPrintChartsLoading] = useState(false)
+  const [printableDiagrams, setPrintableDiagrams] = useState<PrintableDiagram[]>([])
+  const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
@@ -315,74 +324,36 @@ function App() {
       .join('\n')
   }
 
-  function findNearestSectional(lat: number, lon: number, availableSectionals: SectionalChart[]) {
-    return availableSectionals
-      .filter((sectional) => sectional.centerLat != null && sectional.centerLon != null)
-      .sort((a, b) => {
-        const aLat = a.centerLat ?? 0
-        const aLon = a.centerLon ?? 0
-        const bLat = b.centerLat ?? 0
-        const bLon = b.centerLon ?? 0
-        const aDist2 = (aLat - lat) ** 2 + (aLon - lon) ** 2
-        const bDist2 = (bLat - lat) ** 2 + (bLon - lon) ** 2
-        return aDist2 - bDist2
-      })[0] ?? null
-  }
-
-  async function loadPrintableCharts(
-    depAirportResponse: AirportResponse,
-    arrAirportResponse: AirportResponse,
-    availableSectionals: SectionalChart[]
-  ) {
-    setPrintChartsLoading(true)
+  async function loadPrintableDiagrams(depAirportResponse: AirportResponse, arrAirportResponse: AirportResponse) {
+    setPrintDiagramsLoading(true)
 
     try {
-      const depChart = findNearestSectional(depAirportResponse.airport.lat, depAirportResponse.airport.lon, availableSectionals)
-      const arrChart = findNearestSectional(arrAirportResponse.airport.lat, arrAirportResponse.airport.lon, availableSectionals)
+      const diagramCandidates = [
+        { role: 'Departure' as const, airportIcao: depAirportResponse.airport.icao },
+        { role: 'Arrival' as const, airportIcao: arrAirportResponse.airport.icao }
+      ]
 
-      const chartCandidates = [
-        depChart
-          ? {
-            role: 'Departure' as const,
-            airportIcao: depAirportResponse.airport.icao,
-            chart: depChart
+      const resolved = await Promise.all(
+        diagramCandidates.map(async (candidate) => {
+          const response = await fetchJson<AirportDiagramResponse>(`/api/airport-diagram/by-airport/${candidate.airportIcao}`)
+          if (!response.diagram) {
+            return null
           }
-          : null,
-        arrChart
-          ? {
-            role: 'Arrival' as const,
-            airportIcao: arrAirportResponse.airport.icao,
-            chart: arrChart
-          }
-          : null
-      ].filter((value): value is NonNullable<typeof value> => Boolean(value))
-
-      if (!chartCandidates.length) {
-        setPrintableCharts([])
-        return
-      }
-
-      const overlays = await Promise.all(
-        chartCandidates.map(async (candidate) => {
-          const metadata = await fetchJson<SectionalOverlayMetadata>(
-            `/api/sectionals/overlay-metadata?source=${encodeURIComponent(candidate.chart.url)}`
-          )
 
           return {
             role: candidate.role,
             airportIcao: candidate.airportIcao,
-            chartName: candidate.chart.name,
-            effectiveDate: candidate.chart.effectiveDate,
-            imageUrl: metadata.imageUrl
+            chartName: response.diagram.chartName,
+            pdfUrl: response.diagram.proxiedPdfUrl
           }
         })
       )
 
-      setPrintableCharts(overlays)
+      setPrintableDiagrams(resolved.filter((item): item is PrintableDiagram => Boolean(item)))
     } catch {
-      setPrintableCharts([])
+      setPrintableDiagrams([])
     } finally {
-      setPrintChartsLoading(false)
+      setPrintDiagramsLoading(false)
     }
   }
 
@@ -530,7 +501,7 @@ function App() {
         setSelectedSectionalUrl(selected.url)
       }
 
-      await loadPrintableCharts(depAirportResponse, arrAirportResponse, sectionalResponse.sectionals)
+      await loadPrintableDiagrams(depAirportResponse, arrAirportResponse)
 
       if (!waypointsInput.trim() && suggestionResponse.suggestions.length) {
         const value = suggestionResponse.suggestions
@@ -580,7 +551,7 @@ function App() {
       setSuggestedWaypoints([])
       setWindsAloft(null)
       setRoutePoints([])
-      setPrintableCharts([])
+      setPrintableDiagrams([])
     } finally {
       setLoading(false)
     }
@@ -1057,18 +1028,22 @@ function App() {
             </div>
           </div>
 
-          <h3>Departure and Arrival Airport Charts</h3>
-          {printChartsLoading && <p>Loading printable chart images...</p>}
-          {!printChartsLoading && printableCharts.length === 0 && (
-            <p>Printable charts unavailable for this route.</p>
+          <h3>Departure and Arrival Airport Diagrams</h3>
+          {printDiagramsLoading && <p>Loading airport diagrams...</p>}
+          {!printDiagramsLoading && printableDiagrams.length === 0 && (
+            <p>Airport diagrams unavailable for this route.</p>
           )}
 
           <div className="print-charts-grid">
-            {printableCharts.map((chart) => (
+            {printableDiagrams.map((chart) => (
               <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
-                <h4>{chart.role} Chart - {chart.airportIcao}</h4>
-                <p>{chart.chartName} ({chart.effectiveDate})</p>
-                <img src={chart.imageUrl} alt={`${chart.role} chart for ${chart.airportIcao}`} />
+                <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
+                <p>{chart.chartName}</p>
+                <iframe
+                  title={`${chart.role} airport diagram for ${chart.airportIcao}`}
+                  src={chart.pdfUrl}
+                  className="print-diagram-frame"
+                />
               </article>
             ))}
           </div>

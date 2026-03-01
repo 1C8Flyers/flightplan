@@ -223,6 +223,14 @@ th {
   border-radius: 6px;
 }
 
+.print-diagram-frame {
+  width: 100%;
+  height: 860px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+}
+
 @media (max-width: 760px) {
   .columns {
     grid-template-columns: 1fr;
@@ -278,5 +286,10 @@ th {
 
   .print-chart-item {
     break-inside: avoid;
+  }
+
+  .print-diagram-frame {
+    height: 9.4in;
+    border: 1px solid #777;
   }
 }

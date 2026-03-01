@@ -12,7 +12,7 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 - Suggested enroute waypoint airports auto-generated along route corridor
 - FAA sectional chart selector + route overlay map
 - Printable in-flight nav log packet with write-in fields (ATD/ATA/actual GS/fuel/notes)
-- Printable departure and arrival chart pages based on nearest FAA sectional coverage
+- Printable departure and arrival airport diagrams (APD)
 - Automatic ETE and fuel estimates by leg and totals
 
 ## Data Sources

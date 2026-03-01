@@ -112,6 +112,13 @@ type ResolvedAirport = {
   dataset: AirportRecord | null
 }
 
+type AirportDiagram = {
+  icao: string
+  faa: string | null
+  chartName: string
+  pdfUrl: string
+}
+
 let faaCache: { loadedAt: number; delays: FaaDelay[] } | null = null
 let airportCache: { loadedAt: number; airports: AirportRecord[] } | null = null
 let navaidCache: { loadedAt: number; navaids: NavaidRecord[] } | null = null
@@ -126,6 +133,7 @@ type LandmarkResult = {
 }
 
 const landmarkCache = new Map<string, { loadedAt: number; result: LandmarkResult }>()
+const airportDiagramCache = new Map<string, { loadedAt: number; diagram: AirportDiagram | null }>()
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers: { Accept: 'application/json' } })
@@ -602,6 +610,58 @@ async function findNearbyFaaWaypoint(lat: number, lon: number) {
   return airport ?? navaid
 }
 
+async function fetchAirportDiagram(icaoCode: string) {
+  const normalized = icaoCode.toUpperCase().trim()
+  const cacheWindowMs = 12 * 60 * 60 * 1000
+  const cached = airportDiagramCache.get(normalized)
+  if (cached && Date.now() - cached.loadedAt < cacheWindowMs) {
+    return cached.diagram
+  }
+
+  const resolved = await resolveAirport(normalized)
+  const candidates = [
+    resolved.station?.icaoId,
+    resolved.dataset?.gpsCode,
+    resolved.dataset?.ident,
+    resolved.inputCode
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toUpperCase())
+
+  let selected: AirportDiagram | null = null
+
+  for (const candidate of candidates) {
+    const payload = await fetchJson<Record<string, Array<{
+      chart_code?: string
+      chart_name?: string
+      pdf_path?: string
+      icao_ident?: string
+      faa_ident?: string
+    }>>>(`https://api.aviationapi.com/v1/charts?apt=${candidate}&group=2`)
+
+    const rows = payload[candidate] ?? []
+    const diagram = rows.find((row) => row.chart_code === 'APD' && row.pdf_path)
+    if (!diagram?.pdf_path) {
+      continue
+    }
+
+    selected = {
+      icao: (diagram.icao_ident ?? candidate).toUpperCase(),
+      faa: diagram.faa_ident?.toUpperCase() ?? resolved.station?.faaId?.toUpperCase() ?? null,
+      chartName: diagram.chart_name ?? 'Airport Diagram',
+      pdfUrl: diagram.pdf_path
+    }
+    break
+  }
+
+  airportDiagramCache.set(normalized, {
+    loadedAt: Date.now(),
+    diagram: selected
+  })
+
+  return selected
+}
+
 function selectSuggestedWaypoints(depLat: number, depLon: number, arrLat: number, arrLon: number, airports: AirportRecord[]) {
   const routeAirportPool = airports.filter((airport) =>
     ['small_airport', 'medium_airport', 'large_airport'].includes(airport.type)
@@ -882,6 +942,48 @@ app.get('/api/sectionals/pdf', async (req, res) => {
     const upstream = await fetch(source)
     if (!upstream.ok) {
       res.status(502).json({ error: `FAA PDF request failed (${upstream.status})` })
+      return
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer())
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', 'inline')
+    res.send(buffer)
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+})
+
+app.get('/api/airport-diagram/by-airport/:icao', async (req, res) => {
+  try {
+    const diagram = await fetchAirportDiagram(req.params.icao)
+    if (!diagram) {
+      res.json({ diagram: null })
+      return
+    }
+
+    res.json({
+      diagram: {
+        ...diagram,
+        proxiedPdfUrl: `/api/airport-diagram/pdf?source=${encodeURIComponent(diagram.pdfUrl)}`
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+})
+
+app.get('/api/airport-diagram/pdf', async (req, res) => {
+  try {
+    const source = String(req.query.source ?? '')
+    if (!source.startsWith('https://charts.aviationapi.com/')) {
+      res.status(400).json({ error: 'Invalid airport diagram source URL.' })
+      return
+    }
+
+    const upstream = await fetch(source)
+    if (!upstream.ok) {
+      res.status(502).json({ error: `Airport diagram PDF request failed (${upstream.status})` })
       return
     }
 
