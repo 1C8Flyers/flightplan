@@ -73,6 +73,12 @@ type SectionalOverlayMetadata = {
   imageUrl: string
 }
 
+type LandmarkNameResponse = {
+  ident: string | null
+  label: string | null
+  source: string | null
+}
+
 type Point = {
   ident: string
   lat: number
@@ -599,34 +605,41 @@ function App() {
         marker.on('dragend', async () => {
           try {
             const markerLatLng = marker.getLatLng()
+            const currentPoint = routePoints[index]
+            const originalIdent = currentPoint.originalIdent ?? currentPoint.ident
+            const originalLat = currentPoint.originalLat ?? currentPoint.lat
+            const originalLon = currentPoint.originalLon ?? currentPoint.lon
+            const movedFromOriginalNm = haversineNm(
+              { ident: originalIdent, lat: originalLat, lon: originalLon },
+              { ident: originalIdent, lat: markerLatLng.lat, lon: markerLatLng.lng }
+            )
+
+            const isEndpoint = index === 0 || index === routePoints.length - 1
+            let movedIdent = originalIdent
+
+            if (!isEndpoint && movedFromOriginalNm > 0.1) {
+              const landmark = await fetchJson<LandmarkNameResponse>(
+                `/api/landmark-name?lat=${markerLatLng.lat}&lon=${markerLatLng.lng}`
+              )
+
+              movedIdent = landmark.ident ?? `WP${index}`
+            }
+
+            if (!isEndpoint && movedFromOriginalNm <= 0.1) {
+              movedIdent = originalIdent
+            }
+
             const updatedPoints = routePoints.map((value, pointIndex) =>
               pointIndex === index
-                ? (() => {
-                  const originalIdent = value.originalIdent ?? value.ident
-                  const originalLat = value.originalLat ?? value.lat
-                  const originalLon = value.originalLon ?? value.lon
-                  const movedFromOriginalNm = haversineNm(
-                    { ident: originalIdent, lat: originalLat, lon: originalLon },
-                    { ident: originalIdent, lat: markerLatLng.lat, lon: markerLatLng.lng }
-                  )
-
-                  const isEndpoint = pointIndex === 0 || pointIndex === routePoints.length - 1
-                  const nextIdent = isEndpoint
-                    ? originalIdent
-                    : movedFromOriginalNm > 0.1
-                      ? `WP${pointIndex}`
-                      : originalIdent
-
-                  return {
-                    ...value,
-                    ident: nextIdent,
-                    lat: markerLatLng.lat,
-                    lon: markerLatLng.lng,
-                    originalIdent,
-                    originalLat,
-                    originalLon
-                  }
-                })()
+                ? {
+                  ...value,
+                  ident: movedIdent,
+                  lat: markerLatLng.lat,
+                  lon: markerLatLng.lng,
+                  originalIdent,
+                  originalLat,
+                  originalLon
+                }
                 : value
             )
 

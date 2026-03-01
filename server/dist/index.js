@@ -53,6 +53,7 @@ let sectionalCache = null;
 let windsAloftCache = null;
 const sectionalGeoTiffCache = new Map();
 const sectionalOverlayCache = new Map();
+const landmarkCache = new Map();
 async function fetchJson(url) {
     const response = await fetch(url, { headers: { Accept: 'application/json' } });
     if (!response.ok) {
@@ -850,6 +851,109 @@ app.get('/api/magnetic-variation', (req, res) => {
             declination,
             convention: 'East positive, West negative. Magnetic = True - declination.'
         });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+function toLandmarkIdent(value, fallback) {
+    const cleaned = value
+        .toUpperCase()
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+        .join('');
+    if (!cleaned) {
+        return fallback;
+    }
+    if (cleaned.length <= 5) {
+        return cleaned;
+    }
+    return cleaned.slice(0, 5);
+}
+async function lookupCityLandmark(lat, lon) {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&zoom=10&addressdetails=1`;
+    const response = await fetch(url, {
+        headers: {
+            'User-Agent': 'NavLog/1.0 (local-dev)'
+        }
+    });
+    if (!response.ok) {
+        throw new Error(`Nominatim reverse lookup failed (${response.status})`);
+    }
+    const body = await response.json();
+    const city = body.address?.city ??
+        body.address?.town ??
+        body.address?.village ??
+        body.address?.hamlet ??
+        body.address?.municipality ??
+        body.address?.county;
+    if (!city) {
+        return null;
+    }
+    return {
+        ident: toLandmarkIdent(city, 'CITY'),
+        label: city,
+        source: 'city'
+    };
+}
+async function lookupRailLandmark(lat, lon) {
+    const overpassQuery = `[out:json][timeout:15];(way(around:2500,${lat},${lon})[railway=rail];);out tags center 1;`;
+    const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'User-Agent': 'NavLog/1.0 (local-dev)'
+        },
+        body: `data=${encodeURIComponent(overpassQuery)}`
+    });
+    if (!response.ok) {
+        throw new Error(`Overpass railway lookup failed (${response.status})`);
+    }
+    const body = await response.json();
+    const firstNamedRail = body.elements?.find((element) => element.tags?.name || element.tags?.ref || element.tags?.operator);
+    if (!firstNamedRail) {
+        return null;
+    }
+    const railName = firstNamedRail.tags?.name ?? firstNamedRail.tags?.ref ?? firstNamedRail.tags?.operator ?? 'Rail';
+    return {
+        ident: toLandmarkIdent(railName, 'RAIL'),
+        label: railName,
+        source: 'rail'
+    };
+}
+app.get('/api/landmark-name', async (req, res) => {
+    try {
+        const lat = Number(req.query.lat);
+        const lon = Number(req.query.lon);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) {
+            res.status(400).json({ error: 'lat and lon are required.' });
+            return;
+        }
+        const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+        const cached = landmarkCache.get(cacheKey);
+        if (cached && Date.now() - cached.loadedAt < 24 * 60 * 60 * 1000) {
+            res.json({ ident: cached.ident, label: cached.label, source: cached.source });
+            return;
+        }
+        const [cityResult, railResult] = await Promise.allSettled([
+            lookupCityLandmark(lat, lon),
+            lookupRailLandmark(lat, lon)
+        ]);
+        const city = cityResult.status === 'fulfilled' ? cityResult.value : null;
+        const rail = railResult.status === 'fulfilled' ? railResult.value : null;
+        const selected = city ?? rail;
+        if (!selected) {
+            res.json({ ident: null, label: null, source: null });
+            return;
+        }
+        landmarkCache.set(cacheKey, {
+            loadedAt: Date.now(),
+            ident: selected.ident,
+            label: selected.label,
+            source: selected.source
+        });
+        res.json(selected);
     }
     catch (error) {
         res.status(500).json({ error: error.message });
