@@ -28,10 +28,28 @@ type AirportResponse = {
 }
 
 type WeatherResponse = {
-  metar: { rawOb?: string; reportTime?: string } | null
+  metar: {
+    rawOb?: string
+    reportTime?: string
+    temp?: number | null
+    dewp?: number | null
+    wdir?: number | null
+    wspd?: number | null
+    visib?: string | null
+    altim?: number | null
+  } | null
   taf: { rawTAF?: string; issueTime?: string } | null
   sourceStation?: string | null
   fallbackUsed?: boolean
+}
+
+type FrequencyResponse = {
+  frequencies: Array<{
+    type: string
+    description: string
+    frequencyMHz: string
+    airportIdent: string
+  }>
 }
 
 type SuggestedWaypoint = {
@@ -88,6 +106,7 @@ type PrintableDiagram = {
   airportIcao: string
   chartName: string
   pdfUrl: string
+  imageUrl: string | null
 }
 
 type LandmarkNameResponse = {
@@ -243,6 +262,8 @@ function App() {
   const [arrAirport, setArrAirport] = useState<AirportResponse | null>(null)
   const [depWeather, setDepWeather] = useState<WeatherResponse | null>(null)
   const [arrWeather, setArrWeather] = useState<WeatherResponse | null>(null)
+  const [depFrequencies, setDepFrequencies] = useState<FrequencyResponse['frequencies']>([])
+  const [arrFrequencies, setArrFrequencies] = useState<FrequencyResponse['frequencies']>([])
   const [suggestedWaypoints, setSuggestedWaypoints] = useState<SuggestedWaypoint[]>([])
   const [sectionals, setSectionals] = useState<SectionalChart[]>([])
   const [selectedSectionalUrl, setSelectedSectionalUrl] = useState('')
@@ -324,6 +345,22 @@ function App() {
       .join('\n')
   }
 
+  function formatDecodedWeather(weather: WeatherResponse | null) {
+    const metar = weather?.metar
+    if (!metar) {
+      return 'No METAR available'
+    }
+
+    const windDirection = metar.wdir == null ? 'VRB' : `${metar.wdir}°`
+    const windSpeed = metar.wspd == null ? '—' : `${metar.wspd}kt`
+    const visibility = metar.visib ? `${metar.visib}SM` : '—'
+    const temperature = metar.temp == null ? '—' : `${metar.temp}°C`
+    const dewpoint = metar.dewp == null ? '—' : `${metar.dewp}°C`
+    const altimeter = metar.altim == null ? '—' : `${metar.altim.toFixed(2)} inHg`
+
+    return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}`
+  }
+
   async function loadPrintableDiagrams(depAirportResponse: AirportResponse, arrAirportResponse: AirportResponse) {
     setPrintDiagramsLoading(true)
 
@@ -340,11 +377,14 @@ function App() {
             return null
           }
 
+          const imageUrl = await renderPdfFirstPageToImage(response.diagram.proxiedPdfUrl)
+
           return {
             role: candidate.role,
             airportIcao: candidate.airportIcao,
             chartName: response.diagram.chartName,
-            pdfUrl: response.diagram.proxiedPdfUrl
+            pdfUrl: response.diagram.proxiedPdfUrl,
+            imageUrl
           }
         })
       )
@@ -354,6 +394,37 @@ function App() {
       setPrintableDiagrams([])
     } finally {
       setPrintDiagramsLoading(false)
+    }
+  }
+
+  async function renderPdfFirstPageToImage(pdfUrl: string) {
+    try {
+      const pdfjsLib: any = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/legacy/build/pdf.worker.min.mjs`
+
+      const loadingTask = pdfjsLib.getDocument({ url: pdfUrl })
+      const pdf = await loadingTask.promise
+      const page = await pdf.getPage(1)
+      const viewport = page.getViewport({ scale: 2.2 })
+
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      if (!context) {
+        await pdf.destroy()
+        return null
+      }
+
+      canvas.width = Math.ceil(viewport.width)
+      canvas.height = Math.ceil(viewport.height)
+
+      await page.render({ canvasContext: context, viewport }).promise
+      const imageUrl = canvas.toDataURL('image/png')
+
+      page.cleanup()
+      await pdf.destroy()
+      return imageUrl
+    } catch {
+      return null
     }
   }
 
@@ -461,11 +532,13 @@ function App() {
       const depIcao = departure.trim().toUpperCase()
       const arrIcao = arrival.trim().toUpperCase()
 
-      const [depAirportResponse, arrAirportResponse, depWeatherResponse, arrWeatherResponse] = await Promise.all([
+      const [depAirportResponse, arrAirportResponse, depWeatherResponse, arrWeatherResponse, depFrequencyResponse, arrFrequencyResponse] = await Promise.all([
         fetchJson<AirportResponse>(`/api/airport/${depIcao}`),
         fetchJson<AirportResponse>(`/api/airport/${arrIcao}`),
         fetchJson<WeatherResponse>(`/api/weather/${depIcao}`),
-        fetchJson<WeatherResponse>(`/api/weather/${arrIcao}`)
+        fetchJson<WeatherResponse>(`/api/weather/${arrIcao}`),
+        fetchJson<FrequencyResponse>(`/api/frequencies/${depIcao}`),
+        fetchJson<FrequencyResponse>(`/api/frequencies/${arrIcao}`)
       ])
 
       const [suggestionResponse, sectionalResponse] = await Promise.all([
@@ -479,6 +552,8 @@ function App() {
       setArrAirport(arrAirportResponse)
       setDepWeather(depWeatherResponse)
       setArrWeather(arrWeatherResponse)
+      setDepFrequencies(depFrequencyResponse.frequencies)
+      setArrFrequencies(arrFrequencyResponse.frequencies)
       setSuggestedWaypoints(suggestionResponse.suggestions)
       setSectionals(sectionalResponse.sectionals)
 
@@ -552,6 +627,8 @@ function App() {
       setWindsAloft(null)
       setRoutePoints([])
       setPrintableDiagrams([])
+      setDepFrequencies([])
+      setArrFrequencies([])
     } finally {
       setLoading(false)
     }
@@ -956,7 +1033,7 @@ function App() {
       )}
 
       {legs.length > 0 && depAirport && arrAirport && (
-        <section className="card print-packet">
+        <section className="card print-packet kneeboard-packet">
           <h2>VFR Nav Log - Printable Flight Packet</h2>
           <p>
             Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
@@ -972,6 +1049,44 @@ function App() {
             Cruise Altitude: {cruiseAltitudeFt} ft {' · '}
             Fuel Burn: {fuelBurn} gph
           </p>
+
+          <div className="kneeboard-meta-grid">
+            <article>
+              <h3>Departure {depAirport.airport.icao}</h3>
+              <p>{formatDecodedWeather(depWeather)}</p>
+              <p><strong>Frequencies:</strong></p>
+              {depFrequencies.length > 0 ? (
+                <ul className="freq-list">
+                  {depFrequencies.slice(0, 8).map((frequency) => (
+                    <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
+                      {frequency.type}: {frequency.frequencyMHz}
+                      {frequency.description ? ` (${frequency.description})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Frequency data unavailable.</p>
+              )}
+            </article>
+
+            <article>
+              <h3>Arrival {arrAirport.airport.icao}</h3>
+              <p>{formatDecodedWeather(arrWeather)}</p>
+              <p><strong>Frequencies:</strong></p>
+              {arrFrequencies.length > 0 ? (
+                <ul className="freq-list">
+                  {arrFrequencies.slice(0, 8).map((frequency) => (
+                    <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
+                      {frequency.type}: {frequency.frequencyMHz}
+                      {frequency.description ? ` (${frequency.description})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Frequency data unavailable.</p>
+              )}
+            </article>
+          </div>
 
           <table className="print-navlog-table">
             <thead>
@@ -1036,14 +1151,21 @@ function App() {
 
           <div className="print-charts-grid">
             {printableDiagrams.map((chart) => (
-              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
+              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item diagram-page">
                 <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
                 <p>{chart.chartName}</p>
-                <iframe
-                  title={`${chart.role} airport diagram for ${chart.airportIcao}`}
-                  src={chart.pdfUrl}
-                  className="print-diagram-frame"
-                />
+                {chart.imageUrl ? (
+                  <img src={chart.imageUrl} alt={`${chart.role} airport diagram for ${chart.airportIcao}`} className="print-diagram-image" />
+                ) : (
+                  <p>
+                    Diagram preview unavailable. Open full PDF:
+                    {' '}
+                    <a href={chart.pdfUrl} target="_blank" rel="noreferrer">{chart.airportIcao} airport diagram</a>
+                  </p>
+                )}
+                <p className="screen-only">
+                  <a href={chart.pdfUrl} target="_blank" rel="noreferrer">Open full PDF</a>
+                </p>
               </article>
             ))}
           </div>

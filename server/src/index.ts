@@ -84,6 +84,13 @@ type NavaidRecord = {
   lon: number
 }
 
+type AirportFrequencyRecord = {
+  airportIdent: string
+  type: string
+  description: string
+  frequencyMHz: string
+}
+
 type WaypointSuggestion = {
   ident: string
   name: string
@@ -122,6 +129,7 @@ type AirportDiagram = {
 let faaCache: { loadedAt: number; delays: FaaDelay[] } | null = null
 let airportCache: { loadedAt: number; airports: AirportRecord[] } | null = null
 let navaidCache: { loadedAt: number; navaids: NavaidRecord[] } | null = null
+let airportFrequencyCache: { loadedAt: number; frequencies: AirportFrequencyRecord[] } | null = null
 let sectionalCache: { loadedAt: number; sectionals: SectionalChart[] } | null = null
 let windsAloftCache: { loadedAt: number; stations: WindsAloftStation[] } | null = null
 const sectionalGeoTiffCache = new Map<string, Buffer>()
@@ -362,6 +370,76 @@ async function fetchNavaidsDataset() {
 
   navaidCache = { loadedAt: Date.now(), navaids }
   return navaids
+}
+
+async function fetchAirportFrequenciesDataset() {
+  const cacheWindowMs = 24 * 60 * 60 * 1000
+  if (airportFrequencyCache && Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs) {
+    return airportFrequencyCache.frequencies
+  }
+
+  const response = await fetch('https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airport-frequencies.csv')
+  if (!response.ok) {
+    throw new Error(`Airport frequency dataset request failed (${response.status})`)
+  }
+
+  const csv = await response.text()
+  const rows = csv.split(/\r?\n/)
+  const headers = parseCsvLine(rows[0])
+
+  const airportIdentIndex = headers.indexOf('airport_ident')
+  const typeIndex = headers.indexOf('type')
+  const descriptionIndex = headers.indexOf('description')
+  const frequencyIndex = headers.indexOf('frequency_mhz')
+
+  const frequencies: AirportFrequencyRecord[] = []
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index]
+    if (!row.trim()) {
+      continue
+    }
+
+    const cols = parseCsvLine(row)
+    const airportIdent = (cols[airportIdentIndex] ?? '').toUpperCase().trim()
+    const type = (cols[typeIndex] ?? '').toUpperCase().trim()
+    const description = (cols[descriptionIndex] ?? '').trim()
+    const frequencyMHz = (cols[frequencyIndex] ?? '').trim()
+
+    if (!airportIdent || !type || !frequencyMHz) {
+      continue
+    }
+
+    frequencies.push({
+      airportIdent,
+      type,
+      description,
+      frequencyMHz
+    })
+  }
+
+  airportFrequencyCache = { loadedAt: Date.now(), frequencies }
+  return frequencies
+}
+
+function rankFrequencyType(type: string) {
+  const order = [
+    'ATIS',
+    'AWOS',
+    'ASOS',
+    'CTAF',
+    'UNIC',
+    'TWR',
+    'GND',
+    'CLNC',
+    'APP',
+    'DEP',
+    'RDO',
+    'FSS'
+  ]
+
+  const index = order.findIndex((item) => type.startsWith(item))
+  return index === -1 ? order.length : index
 }
 
 function getAirportCodeCandidates(code: string) {
@@ -896,6 +974,58 @@ app.get('/api/weather/:icao', async (req, res) => {
       sourceStation: fallback.sourceStation,
       fallbackUsed: true
     })
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+})
+
+app.get('/api/frequencies/:icao', async (req, res) => {
+  try {
+    const resolved = await resolveAirport(req.params.icao)
+    const allFrequencies = await fetchAirportFrequenciesDataset()
+
+    const candidates = [
+      resolved.station?.icaoId,
+      resolved.station?.faaId,
+      resolved.station?.iataId,
+      resolved.station?.icaoId?.replace(/^K/, ''),
+      resolved.dataset?.ident,
+      resolved.dataset?.gpsCode,
+      resolved.dataset?.localCode,
+      resolved.dataset?.iataCode,
+      resolved.inputCode
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toUpperCase())
+
+    const matches = allFrequencies
+      .filter((frequency) => candidates.includes(frequency.airportIdent))
+      .map((frequency) => ({
+        type: frequency.type,
+        description: frequency.description,
+        frequencyMHz: frequency.frequencyMHz,
+        airportIdent: frequency.airportIdent
+      }))
+
+    const deduped = matches.filter((item, index, array) =>
+      array.findIndex((candidate) =>
+        candidate.type === item.type &&
+        candidate.description === item.description &&
+        candidate.frequencyMHz === item.frequencyMHz
+      ) === index
+    )
+
+    const frequencies = deduped
+      .sort((a, b) => {
+        const typeDelta = rankFrequencyType(a.type) - rankFrequencyType(b.type)
+        if (typeDelta !== 0) {
+          return typeDelta
+        }
+        return Number(a.frequencyMHz) - Number(b.frequencyMHz)
+      })
+      .slice(0, 18)
+
+    res.json({ frequencies })
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })
   }
