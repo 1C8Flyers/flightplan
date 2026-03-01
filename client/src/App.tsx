@@ -577,6 +577,7 @@ function App() {
       routeLayerRef.current.addTo(mapRef.current)
 
       const markers = routePoints.map((point, index) => {
+        const isEndpoint = index === 0 || index === routePoints.length - 1
         const markerClass = index === 0 ? 'marker-start' : index === routePoints.length - 1 ? 'marker-end' : 'marker-waypoint'
         const icon = leaflet.divIcon({
           className: 'route-marker-icon',
@@ -585,71 +586,72 @@ function App() {
           iconAnchor: [7, 7]
         })
 
-        const marker = leaflet.marker([point.lat, point.lon], { icon, draggable: true })
+        const marker = leaflet.marker([point.lat, point.lon], { icon, draggable: !isEndpoint })
 
-        marker.on('drag', () => {
-          if (!routeLayerRef.current) {
-            return
-          }
+        if (!isEndpoint) {
+          marker.on('drag', () => {
+            if (!routeLayerRef.current) {
+              return
+            }
 
-          const markerLatLng = marker.getLatLng()
-          const livePoints = routePoints.map((value, pointIndex) =>
-            pointIndex === index
-              ? { ...value, lat: markerLatLng.lat, lon: markerLatLng.lng }
-              : value
-          )
-
-          routeLayerRef.current.setLatLngs(livePoints.map((value) => [value.lat, value.lon]))
-        })
-
-        marker.on('dragend', async () => {
-          try {
             const markerLatLng = marker.getLatLng()
-            const currentPoint = routePoints[index]
-            const originalIdent = currentPoint.originalIdent ?? currentPoint.ident
-            const originalLat = currentPoint.originalLat ?? currentPoint.lat
-            const originalLon = currentPoint.originalLon ?? currentPoint.lon
-            const movedFromOriginalNm = haversineNm(
-              { ident: originalIdent, lat: originalLat, lon: originalLon },
-              { ident: originalIdent, lat: markerLatLng.lat, lon: markerLatLng.lng }
-            )
-
-            const isEndpoint = index === 0 || index === routePoints.length - 1
-            let movedIdent = originalIdent
-
-            if (!isEndpoint && movedFromOriginalNm > 0.1) {
-              const landmark = await fetchJson<LandmarkNameResponse>(
-                `/api/landmark-name?lat=${markerLatLng.lat}&lon=${markerLatLng.lng}`
-              )
-
-              movedIdent = landmark.ident ?? `WP${index}`
-            }
-
-            if (!isEndpoint && movedFromOriginalNm <= 0.1) {
-              movedIdent = originalIdent
-            }
-
-            const updatedPoints = routePoints.map((value, pointIndex) =>
+            const livePoints = routePoints.map((value, pointIndex) =>
               pointIndex === index
-                ? {
-                  ...value,
-                  ident: movedIdent,
-                  lat: markerLatLng.lat,
-                  lon: markerLatLng.lng,
-                  originalIdent,
-                  originalLat,
-                  originalLon
-                }
+                ? { ...value, lat: markerLatLng.lat, lon: markerLatLng.lng }
                 : value
             )
 
-            setRoutePoints(updatedPoints)
-            setWaypointsInput(toWaypointInputFromRoute(updatedPoints))
-            await recomputeRouteCalculations(updatedPoints)
-          } catch (caughtError) {
-            setError((caughtError as Error).message)
-          }
-        })
+            routeLayerRef.current.setLatLngs(livePoints.map((value) => [value.lat, value.lon]))
+          })
+
+          marker.on('dragend', async () => {
+            try {
+              const markerLatLng = marker.getLatLng()
+              const currentPoint = routePoints[index]
+              const originalIdent = currentPoint.originalIdent ?? currentPoint.ident
+              const originalLat = currentPoint.originalLat ?? currentPoint.lat
+              const originalLon = currentPoint.originalLon ?? currentPoint.lon
+              const movedFromOriginalNm = haversineNm(
+                { ident: originalIdent, lat: originalLat, lon: originalLon },
+                { ident: originalIdent, lat: markerLatLng.lat, lon: markerLatLng.lng }
+              )
+
+              let movedIdent = originalIdent
+
+              if (movedFromOriginalNm > 0.1) {
+                const landmark = await fetchJson<LandmarkNameResponse>(
+                  `/api/landmark-name?lat=${markerLatLng.lat}&lon=${markerLatLng.lng}`
+                )
+
+                movedIdent = landmark.ident ?? `WP${index}`
+              }
+
+              if (movedFromOriginalNm <= 0.1) {
+                movedIdent = originalIdent
+              }
+
+              const updatedPoints = routePoints.map((value, pointIndex) =>
+                pointIndex === index
+                  ? {
+                    ...value,
+                    ident: movedIdent,
+                    lat: markerLatLng.lat,
+                    lon: markerLatLng.lng,
+                    originalIdent,
+                    originalLat,
+                    originalLon
+                  }
+                  : value
+              )
+
+              setRoutePoints(updatedPoints)
+              setWaypointsInput(toWaypointInputFromRoute(updatedPoints))
+              await recomputeRouteCalculations(updatedPoints)
+            } catch (caughtError) {
+              setError((caughtError as Error).message)
+            }
+          })
+        }
 
         return marker
       })

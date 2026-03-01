@@ -76,6 +76,14 @@ type AirportRecord = {
   gpsCode: string | null
 }
 
+type NavaidRecord = {
+  ident: string
+  name: string
+  type: string
+  lat: number
+  lon: number
+}
+
 type WaypointSuggestion = {
   ident: string
   name: string
@@ -106,11 +114,18 @@ type ResolvedAirport = {
 
 let faaCache: { loadedAt: number; delays: FaaDelay[] } | null = null
 let airportCache: { loadedAt: number; airports: AirportRecord[] } | null = null
+let navaidCache: { loadedAt: number; navaids: NavaidRecord[] } | null = null
 let sectionalCache: { loadedAt: number; sectionals: SectionalChart[] } | null = null
 let windsAloftCache: { loadedAt: number; stations: WindsAloftStation[] } | null = null
 const sectionalGeoTiffCache = new Map<string, Buffer>()
 const sectionalOverlayCache = new Map<string, { image: Buffer; bounds: [[number, number], [number, number]] }>()
-const landmarkCache = new Map<string, { loadedAt: number; ident: string; label: string; source: string }>()
+type LandmarkResult = {
+  ident: string | null
+  label: string | null
+  source: string | null
+}
+
+const landmarkCache = new Map<string, { loadedAt: number; result: LandmarkResult }>()
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers: { Accept: 'application/json' } })
@@ -293,6 +308,52 @@ async function fetchAirportsDataset() {
 
   airportCache = { loadedAt: Date.now(), airports }
   return airports
+}
+
+async function fetchNavaidsDataset() {
+  const cacheWindowMs = 24 * 60 * 60 * 1000
+  if (navaidCache && Date.now() - navaidCache.loadedAt < cacheWindowMs) {
+    return navaidCache.navaids
+  }
+
+  const response = await fetch('https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/navaids.csv')
+  if (!response.ok) {
+    throw new Error(`Navaid dataset request failed (${response.status})`)
+  }
+
+  const csv = await response.text()
+  const rows = csv.split(/\r?\n/)
+  const headers = parseCsvLine(rows[0])
+
+  const identIndex = headers.indexOf('ident')
+  const nameIndex = headers.indexOf('name')
+  const typeIndex = headers.indexOf('type')
+  const latIndex = headers.indexOf('latitude_deg')
+  const lonIndex = headers.indexOf('longitude_deg')
+
+  const navaids: NavaidRecord[] = []
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index]
+    if (!row.trim()) {
+      continue
+    }
+
+    const cols = parseCsvLine(row)
+    const ident = (cols[identIndex] ?? '').toUpperCase().trim()
+    const name = (cols[nameIndex] ?? '').trim()
+    const type = (cols[typeIndex] ?? '').trim().toUpperCase()
+    const lat = Number(cols[latIndex])
+    const lon = Number(cols[lonIndex])
+
+    if (!ident || !name || Number.isNaN(lat) || Number.isNaN(lon)) {
+      continue
+    }
+
+    navaids.push({ ident, name, type, lat, lon })
+  }
+
+  navaidCache = { loadedAt: Date.now(), navaids }
+  return navaids
 }
 
 function getAirportCodeCandidates(code: string) {
@@ -499,6 +560,46 @@ async function fetchNearestReportingWeather(lat: number, lon: number) {
   }
 
   return direct
+}
+
+async function findNearbyFaaWaypoint(lat: number, lon: number) {
+  const [airports, navaids] = await Promise.all([fetchAirportsDataset(), fetchNavaidsDataset()])
+
+  const airportCandidates = airports
+    .filter((airport) =>
+      ['small_airport', 'medium_airport', 'large_airport', 'seaplane_base'].includes(airport.type)
+    )
+    .map((airport) => ({
+      ident: airport.ident.toUpperCase(),
+      label: airport.name,
+      source: 'faa-airport' as const,
+      distanceNm: haversineNm(lat, lon, airport.lat, airport.lon)
+    }))
+    .filter((candidate) => candidate.distanceNm <= 8)
+    .sort((a, b) => a.distanceNm - b.distanceNm)
+
+  const navaidCandidates = navaids
+    .map((navaid) => ({
+      ident: navaid.ident,
+      label: navaid.name,
+      source: `faa-navaid-${navaid.type.toLowerCase()}`,
+      distanceNm: haversineNm(lat, lon, navaid.lat, navaid.lon)
+    }))
+    .filter((candidate) => candidate.distanceNm <= 12)
+    .sort((a, b) => a.distanceNm - b.distanceNm)
+
+  const airport = airportCandidates[0] ?? null
+  const navaid = navaidCandidates[0] ?? null
+
+  if (!airport && !navaid) {
+    return null
+  }
+
+  if (airport && navaid) {
+    return airport.distanceNm <= navaid.distanceNm + 1 ? airport : navaid
+  }
+
+  return airport ?? navaid
 }
 
 function selectSuggestedWaypoints(depLat: number, depLon: number, arrLat: number, arrLon: number, airports: AirportRecord[]) {
@@ -1074,105 +1175,6 @@ app.get('/api/magnetic-variation', (req, res) => {
   }
 })
 
-function toLandmarkIdent(value: string, fallback: string) {
-  const cleaned = value
-    .toUpperCase()
-    .replace(/[^A-Z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .join('')
-
-  if (!cleaned) {
-    return fallback
-  }
-
-  if (cleaned.length <= 5) {
-    return cleaned
-  }
-
-  return cleaned.slice(0, 5)
-}
-
-async function lookupCityLandmark(lat: number, lon: number) {
-  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&zoom=10&addressdetails=1`
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'NavLog/1.0 (local-dev)'
-    }
-  })
-
-  if (!response.ok) {
-    throw new Error(`Nominatim reverse lookup failed (${response.status})`)
-  }
-
-  const body = await response.json() as {
-    address?: {
-      city?: string
-      town?: string
-      village?: string
-      hamlet?: string
-      municipality?: string
-      county?: string
-    }
-  }
-
-  const city =
-    body.address?.city ??
-    body.address?.town ??
-    body.address?.village ??
-    body.address?.hamlet ??
-    body.address?.municipality ??
-    body.address?.county
-
-  if (!city) {
-    return null
-  }
-
-  return {
-    ident: toLandmarkIdent(city, 'CITY'),
-    label: city,
-    source: 'city'
-  }
-}
-
-async function lookupRailLandmark(lat: number, lon: number) {
-  const overpassQuery = `[out:json][timeout:15];(way(around:2500,${lat},${lon})[railway=rail];);out tags center 1;`
-  const response = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'User-Agent': 'NavLog/1.0 (local-dev)'
-    },
-    body: `data=${encodeURIComponent(overpassQuery)}`
-  })
-
-  if (!response.ok) {
-    throw new Error(`Overpass railway lookup failed (${response.status})`)
-  }
-
-  const body = await response.json() as {
-    elements?: Array<{
-      tags?: { name?: string; ref?: string; operator?: string }
-    }>
-  }
-
-  const firstNamedRail = body.elements?.find((element) =>
-    element.tags?.name || element.tags?.ref || element.tags?.operator
-  )
-
-  if (!firstNamedRail) {
-    return null
-  }
-
-  const railName = firstNamedRail.tags?.name ?? firstNamedRail.tags?.ref ?? firstNamedRail.tags?.operator ?? 'Rail'
-
-  return {
-    ident: toLandmarkIdent(railName, 'RAIL'),
-    label: railName,
-    source: 'rail'
-  }
-}
-
 app.get('/api/landmark-name', async (req, res) => {
   try {
     const lat = Number(req.query.lat)
@@ -1186,33 +1188,23 @@ app.get('/api/landmark-name', async (req, res) => {
     const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`
     const cached = landmarkCache.get(cacheKey)
     if (cached && Date.now() - cached.loadedAt < 24 * 60 * 60 * 1000) {
-      res.json({ ident: cached.ident, label: cached.label, source: cached.source })
+      res.json(cached.result)
       return
     }
 
-    const [cityResult, railResult] = await Promise.allSettled([
-      lookupCityLandmark(lat, lon),
-      lookupRailLandmark(lat, lon)
-    ])
+    const faaNearby = await findNearbyFaaWaypoint(lat, lon)
+    const selected = faaNearby
 
-    const city = cityResult.status === 'fulfilled' ? cityResult.value : null
-    const rail = railResult.status === 'fulfilled' ? railResult.value : null
-
-    const selected = city ?? rail
-
-    if (!selected) {
-      res.json({ ident: null, label: null, source: null })
-      return
-    }
+    const result: LandmarkResult = selected
+      ? { ident: selected.ident, label: selected.label, source: selected.source }
+      : { ident: null, label: null, source: null }
 
     landmarkCache.set(cacheKey, {
       loadedAt: Date.now(),
-      ident: selected.ident,
-      label: selected.label,
-      source: selected.source
+      result
     })
 
-    res.json(selected)
+    res.json(result)
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })
   }
