@@ -289,6 +289,10 @@ function App() {
     return { totalDistance, totalTime, totalFuel }
   }, [legs])
 
+  const splitLegIndex = useMemo(() => Math.ceil(legs.length / 2), [legs.length])
+  const leftPanelLegs = useMemo(() => legs.slice(0, splitLegIndex), [legs, splitLegIndex])
+  const rightPanelLegs = useMemo(() => legs.slice(splitLegIndex), [legs, splitLegIndex])
+
   async function fetchJson<T>(path: string): Promise<T> {
     const response = await fetch(path)
     if (!response.ok) {
@@ -1034,113 +1038,162 @@ function App() {
 
       {legs.length > 0 && depAirport && arrAirport && (
         <section className="card print-packet kneeboard-packet">
-          <h2>VFR Nav Log - Printable Flight Packet</h2>
-          <p>
-            Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
-            {' · '}
-            Date: __________
-            {' · '}
-            Aircraft: __________
-            {' · '}
-            Tail #: __________
-          </p>
-          <p>
-            Planned TAS: {tas} kts {' · '}
-            Cruise Altitude: {cruiseAltitudeFt} ft {' · '}
-            Fuel Burn: {fuelBurn} gph
-          </p>
+          <div className="kneeboard-fold-layout">
+            <article className="kneeboard-panel">
+              <h2 className="kneeboard-panel-title">VFR Nav Log (Panel A)</h2>
+              <p>
+                Route: {depAirport.airport.icao} to {arrAirport.airport.icao}
+                {' · '}
+                Date: __________
+              </p>
+              <p>
+                Aircraft: __________ {' · '}
+                Tail #: __________
+              </p>
+              <p>
+                TAS {tas} kts · Alt {cruiseAltitudeFt} ft · Burn {fuelBurn} gph
+              </p>
 
-          <div className="kneeboard-meta-grid">
-            <article>
-              <h3>Departure {depAirport.airport.icao}</h3>
-              <p>{formatDecodedWeather(depWeather)}</p>
-              <p><strong>Frequencies:</strong></p>
-              {depFrequencies.length > 0 ? (
-                <ul className="freq-list">
-                  {depFrequencies.slice(0, 8).map((frequency) => (
-                    <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
-                      {frequency.type}: {frequency.frequencyMHz}
-                      {frequency.description ? ` (${frequency.description})` : ''}
-                    </li>
+              <div className="kneeboard-meta-grid">
+                <article>
+                  <h3>Departure {depAirport.airport.icao}</h3>
+                  <p>{formatDecodedWeather(depWeather)}</p>
+                  <p><strong>Frequencies:</strong></p>
+                  {depFrequencies.length > 0 ? (
+                    <ul className="freq-list">
+                      {depFrequencies.slice(0, 8).map((frequency) => (
+                        <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
+                          {frequency.type}: {frequency.frequencyMHz}
+                          {frequency.description ? ` (${frequency.description})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>Frequency data unavailable.</p>
+                  )}
+                </article>
+              </div>
+
+              <table className="print-navlog-table">
+                <thead>
+                  <tr>
+                    <th>Leg</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>TC</th>
+                    <th>MH</th>
+                    <th>Dist</th>
+                    <th>GS</th>
+                    <th>ETE</th>
+                    <th>ATD</th>
+                    <th>ATA</th>
+                    <th>Act GS</th>
+                    <th>Fuel</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leftPanelLegs.map((leg, index) => (
+                    <tr key={`print-left-${leg.from}-${leg.to}-${index}`}>
+                      <td>{index + 1}</td>
+                      <td>{leg.from}</td>
+                      <td>{leg.to}</td>
+                      <td>{leg.trueCourse.toFixed(0)}°</td>
+                      <td>{leg.magneticHeading.toFixed(0)}°</td>
+                      <td>{leg.distanceNm.toFixed(1)}</td>
+                      <td>{leg.groundSpeed.toFixed(0)}</td>
+                      <td>{leg.eteMinutes.toFixed(1)}</td>
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell notes-cell" />
+                    </tr>
                   ))}
-                </ul>
-              ) : (
-                <p>Frequency data unavailable.</p>
-              )}
+                </tbody>
+              </table>
+
+              <div className="print-notes-grid">
+                <div className="write-block">
+                  <strong>Preflight / Departure Notes</strong>
+                </div>
+              </div>
             </article>
 
-            <article>
-              <h3>Arrival {arrAirport.airport.icao}</h3>
-              <p>{formatDecodedWeather(arrWeather)}</p>
-              <p><strong>Frequencies:</strong></p>
-              {arrFrequencies.length > 0 ? (
-                <ul className="freq-list">
-                  {arrFrequencies.slice(0, 8).map((frequency) => (
-                    <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
-                      {frequency.type}: {frequency.frequencyMHz}
-                      {frequency.description ? ` (${frequency.description})` : ''}
-                    </li>
+            <article className="kneeboard-panel">
+              <h2 className="kneeboard-panel-title">VFR Nav Log (Panel B)</h2>
+              <p>
+                Totals: {totals.totalDistance.toFixed(1)} NM · {totals.totalTime.toFixed(1)} min · {totals.totalFuel.toFixed(2)} gal
+              </p>
+              <p>
+                Start Hobbs: ______ · End Hobbs: ______ · Fuel On Board: ______
+              </p>
+
+              <div className="kneeboard-meta-grid">
+                <article>
+                  <h3>Arrival {arrAirport.airport.icao}</h3>
+                  <p>{formatDecodedWeather(arrWeather)}</p>
+                  <p><strong>Frequencies:</strong></p>
+                  {arrFrequencies.length > 0 ? (
+                    <ul className="freq-list">
+                      {arrFrequencies.slice(0, 8).map((frequency) => (
+                        <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
+                          {frequency.type}: {frequency.frequencyMHz}
+                          {frequency.description ? ` (${frequency.description})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>Frequency data unavailable.</p>
+                  )}
+                </article>
+              </div>
+
+              <table className="print-navlog-table">
+                <thead>
+                  <tr>
+                    <th>Leg</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>TC</th>
+                    <th>MH</th>
+                    <th>Dist</th>
+                    <th>GS</th>
+                    <th>ETE</th>
+                    <th>ATD</th>
+                    <th>ATA</th>
+                    <th>Act GS</th>
+                    <th>Fuel</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rightPanelLegs.map((leg, index) => (
+                    <tr key={`print-right-${leg.from}-${leg.to}-${index}`}>
+                      <td>{splitLegIndex + index + 1}</td>
+                      <td>{leg.from}</td>
+                      <td>{leg.to}</td>
+                      <td>{leg.trueCourse.toFixed(0)}°</td>
+                      <td>{leg.magneticHeading.toFixed(0)}°</td>
+                      <td>{leg.distanceNm.toFixed(1)}</td>
+                      <td>{leg.groundSpeed.toFixed(0)}</td>
+                      <td>{leg.eteMinutes.toFixed(1)}</td>
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell" />
+                      <td className="write-cell notes-cell" />
+                    </tr>
                   ))}
-                </ul>
-              ) : (
-                <p>Frequency data unavailable.</p>
-              )}
+                </tbody>
+              </table>
+
+              <div className="print-notes-grid">
+                <div className="write-block">
+                  <strong>Enroute / Arrival Notes</strong>
+                </div>
+              </div>
             </article>
-          </div>
-
-          <table className="print-navlog-table">
-            <thead>
-              <tr>
-                <th>Leg</th>
-                <th>From</th>
-                <th>To</th>
-                <th>TC</th>
-                <th>MH</th>
-                <th>Dist</th>
-                <th>Plan GS</th>
-                <th>Plan ETE</th>
-                <th>ATD</th>
-                <th>ATA</th>
-                <th>Actual GS</th>
-                <th>Fuel Used</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {legs.map((leg, index) => (
-                <tr key={`print-${leg.from}-${leg.to}-${index}`}>
-                  <td>{index + 1}</td>
-                  <td>{leg.from}</td>
-                  <td>{leg.to}</td>
-                  <td>{leg.trueCourse.toFixed(0)}°</td>
-                  <td>{leg.magneticHeading.toFixed(0)}°</td>
-                  <td>{leg.distanceNm.toFixed(1)} NM</td>
-                  <td>{leg.groundSpeed.toFixed(0)} kt</td>
-                  <td>{leg.eteMinutes.toFixed(1)} min</td>
-                  <td className="write-cell" />
-                  <td className="write-cell" />
-                  <td className="write-cell" />
-                  <td className="write-cell" />
-                  <td className="write-cell notes-cell" />
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <p className="totals">
-            Total Distance: {totals.totalDistance.toFixed(1)} NM · Total Time: {totals.totalTime.toFixed(1)} min · Planned Fuel: {totals.totalFuel.toFixed(2)} gal
-          </p>
-
-          <div className="print-notes-grid">
-            <div className="write-block">
-              <strong>Preflight / Departure Notes</strong>
-            </div>
-            <div className="write-block">
-              <strong>Enroute Notes</strong>
-            </div>
-            <div className="write-block">
-              <strong>Arrival Notes</strong>
-            </div>
           </div>
 
           <h3>Departure and Arrival Airport Diagrams</h3>

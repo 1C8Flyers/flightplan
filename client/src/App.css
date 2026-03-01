@@ -171,6 +171,22 @@ th {
   margin-top: 1rem;
 }
 
+.kneeboard-fold-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.kneeboard-panel {
+  border: 1px dashed #c9c9c9;
+  border-radius: 8px;
+  padding: 0.45rem;
+}
+
+.kneeboard-panel-title {
+  margin: 0 0 0.3rem;
+}
+
 .kneeboard-meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -275,12 +291,16 @@ th {
   .kneeboard-meta-grid {
     grid-template-columns: 1fr;
   }
+
+  .kneeboard-fold-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media print {
   @page {
-    size: 5.5in 8.5in;
-    margin: 0.22in;
+    size: letter landscape;
+    margin: 0.24in;
   }
 
   .app {
@@ -301,8 +321,34 @@ th {
     break-inside: avoid;
   }
 
+  .kneeboard-fold-layout {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.16in;
+    align-items: start;
+  }
+
+  .kneeboard-panel {
+    border: 1px solid #777;
+    border-radius: 0;
+    padding: 0.12in;
+    min-height: 7.9in;
+    break-inside: avoid;
+  }
+
+  .kneeboard-panel-title {
+    font-size: 11px;
+    margin: 0 0 0.08in;
+  }
+
+  .kneeboard-panel p {
+    margin: 0.04in 0;
+    font-size: 8px;
+    line-height: 1.2;
+  }
+
   .print-navlog-table {
     font-size: 8.2px;
+    margin-top: 0.06in;
   }
 
   .print-navlog-table th,
@@ -316,8 +362,10 @@ th {
   }
 
   .write-block {
-    min-height: 110px;
+    min-height: 0.8in;
     break-inside: avoid;
+    border-radius: 0;
+    padding: 0.08in;
   }
 
   .print-chart-item {
@@ -325,19 +373,19 @@ th {
   }
 
   .kneeboard-meta-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 0.2rem;
-    margin: 0.25rem 0;
+    grid-template-columns: 1fr;
+    gap: 0.08in;
+    margin: 0.08in 0;
   }
 
   .kneeboard-meta-grid article {
     border: 1px solid #777;
-    border-radius: 4px;
-    padding: 0.2rem;
+    border-radius: 0;
+    padding: 0.08in;
   }
 
   .kneeboard-meta-grid h3 {
-    margin: 0 0 0.15rem;
+    margin: 0 0 0.06in;
     font-size: 9px;
   }
 
