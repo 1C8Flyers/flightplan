@@ -203,6 +203,31 @@
   line-height: 1;
 }
 
+.charts-search-result-ident-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.charts-search-result-flight-category {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.charts-search-result-flight-category-loading {
+  background: rgba(115, 123, 138, 0.24);
+  color: #dfe6f3;
+}
+
 .charts-search-result-name {
   font-size: 1.05rem;
   font-weight: 600;
@@ -227,6 +252,41 @@
   border: 1px solid rgba(255, 255, 255, 0.13);
   color: #ecf2fd;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.charts-flight-condition {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.charts-flight-condition-vfr {
+  background: rgba(42, 142, 83, 0.35);
+  color: #aef0c5;
+}
+
+.charts-flight-condition-mvfr {
+  background: rgba(67, 94, 179, 0.38);
+  color: #c9dbff;
+}
+
+.charts-flight-condition-ifr {
+  background: rgba(164, 54, 54, 0.4);
+  color: #ffd5d5;
+}
+
+.charts-flight-condition-lifr {
+  background: rgba(127, 66, 160, 0.42);
+  color: #ebd8ff;
+}
+
+.charts-flight-condition-unknown {
+  background: rgba(115, 123, 138, 0.36);
+  color: #dfe6f3;
 }
 
 .charts-airport-card header {

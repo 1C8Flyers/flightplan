@@ -506,6 +506,42 @@ th {
   font-size: 0.96rem;
 }
 
+.map-airport-flight-conditions {
+  margin: 0 0 0.45rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0.28rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.map-airport-flight-conditions-vfr {
+  background: rgba(42, 142, 83, 0.35);
+  color: #aef0c5;
+}
+
+.map-airport-flight-conditions-mvfr {
+  background: rgba(67, 94, 179, 0.38);
+  color: #c9dbff;
+}
+
+.map-airport-flight-conditions-ifr {
+  background: rgba(164, 54, 54, 0.4);
+  color: #ffd5d5;
+}
+
+.map-airport-flight-conditions-lifr {
+  background: rgba(127, 66, 160, 0.42);
+  color: #ebd8ff;
+}
+
+.map-airport-flight-conditions-unknown {
+  background: rgba(115, 123, 138, 0.36);
+  color: #dfe6f3;
+}
+
 .map-airport-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -747,6 +783,52 @@ th {
 .map-airport-search-ident {
   font-weight: 700;
   font-size: 0.93rem;
+}
+
+.map-airport-search-ident-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.map-airport-search-flight-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.7rem;
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.map-airport-search-flight-badge-vfr {
+  background: rgba(42, 142, 83, 0.35);
+  color: #aef0c5;
+}
+
+.map-airport-search-flight-badge-mvfr {
+  background: rgba(67, 94, 179, 0.38);
+  color: #c9dbff;
+}
+
+.map-airport-search-flight-badge-ifr {
+  background: rgba(164, 54, 54, 0.4);
+  color: #ffd5d5;
+}
+
+.map-airport-search-flight-badge-lifr {
+  background: rgba(127, 66, 160, 0.42);
+  color: #ebd8ff;
+}
+
+.map-airport-search-flight-badge-unknown,
+.map-airport-search-flight-badge-loading {
+  background: rgba(115, 123, 138, 0.36);
+  color: #dfe6f3;
 }
 
 .map-airport-search-name {

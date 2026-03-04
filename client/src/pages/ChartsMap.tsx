@@ -72,6 +72,8 @@ type WeatherResponse = {
   } | null
 }
 
+type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR' | 'Unknown'
+
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(path)
   if (!response.ok) {
@@ -97,6 +99,103 @@ function formatDecodedWeather(weather: WeatherResponse | null) {
   return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint}`
 }
 
+function parseVisibilitySm(value: string | null | undefined) {
+  if (!value) {
+    return null
+  }
+
+  const text = value.trim().toUpperCase().replace(/SM$/, '').trim()
+  if (!text) {
+    return null
+  }
+
+  if (/^\d+(?:\.\d+)?\+$/.test(text)) {
+    return Number(text.slice(0, -1))
+  }
+
+  if (/^P\d+(?:\.\d+)?$/.test(text)) {
+    return Number(text.slice(1))
+  }
+
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    return Number(text)
+  }
+
+  if (/^\d+\s+\d+\/\d+$/.test(text)) {
+    const [wholePart, fractionPart] = text.split(/\s+/)
+    const [numerator, denominator] = fractionPart.split('/').map(Number)
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+      return null
+    }
+    return Number(wholePart) + numerator / denominator
+  }
+
+  if (/^M?\d+\/\d+$/.test(text)) {
+    const normalized = text.startsWith('M') ? text.slice(1) : text
+    const [numerator, denominator] = normalized.split('/').map(Number)
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+      return null
+    }
+    return numerator / denominator
+  }
+
+  return null
+}
+
+function parseCeilingFeetFromMetar(rawMetar: string | undefined) {
+  if (!rawMetar) {
+    return null
+  }
+
+  const tokens = rawMetar.toUpperCase().split(/\s+/)
+  let ceilingFeet: number | null = null
+
+  for (const token of tokens) {
+    const match = token.match(/^(BKN|OVC|VV)(\d{3})(?:CB|TCU)?$/)
+    if (!match) {
+      continue
+    }
+
+    const heightHundreds = Number(match[2])
+    if (!Number.isFinite(heightHundreds)) {
+      continue
+    }
+
+    const heightFeet = heightHundreds * 100
+    ceilingFeet = ceilingFeet == null ? heightFeet : Math.min(ceilingFeet, heightFeet)
+  }
+
+  return ceilingFeet
+}
+
+function getFlightCondition(weather: WeatherResponse | null): FlightCategory {
+  const metar = weather?.metar
+  if (!metar) {
+    return 'Unknown'
+  }
+
+  const visibilitySm = parseVisibilitySm(metar.visib)
+  const ceilingFeet = parseCeilingFeetFromMetar(metar.rawOb)
+
+  if (visibilitySm == null && ceilingFeet == null) {
+    return 'Unknown'
+  }
+
+  if ((visibilitySm != null && visibilitySm < 1) || (ceilingFeet != null && ceilingFeet < 500)) {
+    return 'LIFR'
+  }
+
+  if ((visibilitySm != null && visibilitySm < 3) || (ceilingFeet != null && ceilingFeet < 1000)) {
+    return 'IFR'
+  }
+
+  if ((visibilitySm != null && visibilitySm <= 5) || (ceilingFeet != null && ceilingFeet <= 3000)) {
+    return 'MVFR'
+  }
+
+  return 'VFR'
+}
+
 export default function ChartsMap() {
   const mapHostRef = useRef<HTMLDivElement | null>(null)
   const searchContainerRef = useRef<HTMLDivElement | null>(null)
@@ -118,6 +217,8 @@ export default function ChartsMap() {
   const [selectedAirport, setSelectedAirport] = useState<AirportResponse | null>(null)
   const [selectedAirportWeather, setSelectedAirportWeather] = useState<WeatherResponse | null>(null)
   const [selectedAirportError, setSelectedAirportError] = useState<string | null>(null)
+  const [searchResultFlightConditions, setSearchResultFlightConditions] = useState<Record<string, FlightCategory>>({})
+  const [searchResultFlightConditionsLoading, setSearchResultFlightConditionsLoading] = useState<Record<string, boolean>>({})
 
   const selectedLayer = useMemo(
     () => faaCharts.find((layer) => layer.id === selectedLayerId) ?? faaCharts[0],
@@ -129,6 +230,10 @@ export default function ChartsMap() {
   )
   const trimmedSearchQuery = searchQuery.trim()
   const showSearchPanel = searchFocused || Boolean(trimmedSearchQuery)
+  const selectedAirportFlightCondition = useMemo(
+    () => getFlightCondition(selectedAirportWeather),
+    [selectedAirportWeather]
+  )
 
   useEffect(() => {
     window.localStorage.setItem(storageKey, selectedLayer.id)
@@ -180,6 +285,75 @@ export default function ChartsMap() {
       window.clearTimeout(timeoutId)
     }
   }, [trimmedSearchQuery])
+
+  useEffect(() => {
+    const airportsToLoad = searchResults
+      .slice(0, 8)
+      .map((airport) => airport.ident.toUpperCase())
+      .filter((ident) => !searchResultFlightConditions[ident] && !searchResultFlightConditionsLoading[ident])
+
+    if (!airportsToLoad.length) {
+      return
+    }
+
+    let cancelled = false
+
+    setSearchResultFlightConditionsLoading((current) => {
+      const next = { ...current }
+      for (const ident of airportsToLoad) {
+        next[ident] = true
+      }
+      return next
+    })
+
+    async function loadSearchResultFlightConditions() {
+      const results = await Promise.allSettled(
+        airportsToLoad.map(async (ident) => {
+          const weather = await fetchJson<WeatherResponse>(`/api/weather/${encodeURIComponent(ident)}`)
+          return [ident, getFlightCondition(weather)] as const
+        })
+      )
+
+      if (cancelled) {
+        return
+      }
+
+      setSearchResultFlightConditions((current) => {
+        const next = { ...current }
+        results.forEach((result, index) => {
+          const requestedIdent = airportsToLoad[index]
+          if (!requestedIdent) {
+            return
+          }
+
+          if (result.status === 'fulfilled') {
+            const [ident, category] = result.value
+            next[ident] = category
+            return
+          }
+
+          if (!next[requestedIdent]) {
+            next[requestedIdent] = 'Unknown'
+          }
+        })
+        return next
+      })
+
+      setSearchResultFlightConditionsLoading((current) => {
+        const next = { ...current }
+        for (const ident of airportsToLoad) {
+          delete next[ident]
+        }
+        return next
+      })
+    }
+
+    void loadSearchResultFlightConditions()
+
+    return () => {
+      cancelled = true
+    }
+  }, [searchResults, searchResultFlightConditions, searchResultFlightConditionsLoading])
 
   useEffect(() => {
     function handleDocumentPointerDown(event: MouseEvent) {
@@ -499,7 +673,26 @@ export default function ChartsMap() {
                       {searchResults.map((airport) => (
                         <li key={`${airport.ident}-${airport.lat}-${airport.lon}`}>
                           <button type="button" onClick={() => void selectAirport(airport)}>
-                            <span className="charts-search-result-ident">{airport.ident}</span>
+                            <span className="charts-search-result-ident-row">
+                              <span className="charts-search-result-ident">{airport.ident}</span>
+                              {(() => {
+                                const ident = airport.ident.toUpperCase()
+                                const isLoading = Boolean(searchResultFlightConditionsLoading[ident])
+                                const category = searchResultFlightConditions[ident] ?? 'Unknown'
+                                return (
+                                  <span
+                                    className={`charts-search-result-flight-category ${
+                                      isLoading
+                                        ? 'charts-search-result-flight-category-loading'
+                                        : `charts-flight-condition-${category.toLowerCase()}`
+                                    }`}
+                                    aria-label={isLoading ? 'Flight conditions loading' : `Flight conditions ${category}`}
+                                  >
+                                    {isLoading ? '...' : category}
+                                  </span>
+                                )
+                              })()}
+                            </span>
                             <span className="charts-search-result-name">{airport.name}</span>
                             <span className="charts-search-result-meta">
                               {[airport.city, airport.state, 'USA'].filter(Boolean).join(', ')}
@@ -517,6 +710,12 @@ export default function ChartsMap() {
 
         {(selectedAirport || selectedAirportError) && (
           <article className="charts-airport-card">
+            <div
+              className={`charts-flight-condition charts-flight-condition-${selectedAirportFlightCondition.toLowerCase()}`}
+              aria-live="polite"
+            >
+              {selectedAirportFlightCondition}
+            </div>
             <header>
               <h3>
                 {selectedAirport

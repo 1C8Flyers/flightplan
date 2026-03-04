@@ -158,6 +158,7 @@ type RouteNavaid = {
 }
 
 type MapAirportTab = 'weather' | 'general' | 'winds' | 'frequencies' | 'runways' | 'charts' | 'notams'
+type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR' | 'Unknown'
 
 type LandmarkNameResponse = {
   ident: string | null
@@ -416,6 +417,8 @@ function App() {
   const [mapAirportSearchLoading, setMapAirportSearchLoading] = useState(false)
   const [mapAirportSearchError, setMapAirportSearchError] = useState<string | null>(null)
   const [mapAirportSearchResults, setMapAirportSearchResults] = useState<AirportSearchResult[]>([])
+  const [mapAirportSearchFlightConditions, setMapAirportSearchFlightConditions] = useState<Record<string, FlightCategory>>({})
+  const [mapAirportSearchFlightConditionsLoading, setMapAirportSearchFlightConditionsLoading] = useState<Record<string, boolean>>({})
   const [selectedMapAirport, setSelectedMapAirport] = useState<AirportResponse | null>(null)
   const [selectedMapAirportDistanceNm, setSelectedMapAirportDistanceNm] = useState<number | null>(null)
   const [selectedMapAirportWeather, setSelectedMapAirportWeather] = useState<WeatherResponse | null>(null)
@@ -481,6 +484,10 @@ function App() {
   const trimmedMapAirportSearchQuery = mapAirportSearchQuery.trim()
   const showMapAirportSearchPanel = mapAirportSearchFocused && trimmedMapAirportSearchQuery.length > 0
   const selectedMapAirportIcao = selectedMapAirport?.airport.icao ?? null
+  const selectedMapAirportFlightCategory = useMemo(
+    () => getFlightCategory(selectedMapAirportWeather),
+    [selectedMapAirportWeather]
+  )
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -610,6 +617,77 @@ function App() {
       window.clearTimeout(timeoutId)
     }
   }, [trimmedMapAirportSearchQuery])
+
+  useEffect(() => {
+    const airportsToLoad = mapAirportSearchResults
+      .slice(0, 8)
+      .map((airport) => airport.ident.toUpperCase())
+      .filter((ident) => !mapAirportSearchFlightConditions[ident] && !mapAirportSearchFlightConditionsLoading[ident])
+
+    if (!airportsToLoad.length) {
+      return
+    }
+
+    let cancelled = false
+
+    setMapAirportSearchFlightConditionsLoading((current) => {
+      const next = { ...current }
+      for (const ident of airportsToLoad) {
+        next[ident] = true
+      }
+      return next
+    })
+
+    async function loadMapAirportSearchFlightConditions() {
+      const results = await Promise.allSettled(
+        airportsToLoad.map(async (ident) => {
+          const weather = await fetchJson<WeatherResponse>(`/api/weather/${encodeURIComponent(ident)}`)
+          return [ident, getFlightCategory(weather)] as const
+        })
+      )
+
+      if (cancelled) {
+        return
+      }
+
+      setMapAirportSearchFlightConditions((current) => {
+        const next = { ...current }
+
+        results.forEach((result, index) => {
+          const requestedIdent = airportsToLoad[index]
+          if (!requestedIdent) {
+            return
+          }
+
+          if (result.status === 'fulfilled') {
+            const [ident, category] = result.value
+            next[ident] = category
+            return
+          }
+
+          if (!next[requestedIdent]) {
+            next[requestedIdent] = 'Unknown'
+          }
+        })
+
+        return next
+      })
+
+      setMapAirportSearchFlightConditionsLoading((current) => {
+        const next = { ...current }
+        for (const ident of airportsToLoad) {
+          delete next[ident]
+        }
+        return next
+      })
+    }
+
+    void loadMapAirportSearchFlightConditions()
+
+    return () => {
+      cancelled = true
+    }
+  }, [mapAirportSearchResults, mapAirportSearchFlightConditions, mapAirportSearchFlightConditionsLoading])
 
   useEffect(() => {
     function handleDocumentPointerDown(event: MouseEvent) {
@@ -1047,6 +1125,103 @@ function App() {
         : `${metar.altim.toFixed(2)} inHg`
 
     return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}`
+  }
+
+  function parseVisibilitySm(value: string | null | undefined) {
+    if (!value) {
+      return null
+    }
+
+    const text = value.trim().toUpperCase().replace(/SM$/, '').trim()
+    if (!text) {
+      return null
+    }
+
+    if (/^\d+(?:\.\d+)?\+$/.test(text)) {
+      return Number(text.slice(0, -1))
+    }
+
+    if (/^P\d+(?:\.\d+)?$/.test(text)) {
+      return Number(text.slice(1))
+    }
+
+    if (/^\d+(?:\.\d+)?$/.test(text)) {
+      return Number(text)
+    }
+
+    if (/^\d+\s+\d+\/\d+$/.test(text)) {
+      const [wholePart, fractionPart] = text.split(/\s+/)
+      const [numerator, denominator] = fractionPart.split('/').map(Number)
+      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+        return null
+      }
+      return Number(wholePart) + numerator / denominator
+    }
+
+    if (/^M?\d+\/\d+$/.test(text)) {
+      const normalized = text.startsWith('M') ? text.slice(1) : text
+      const [numerator, denominator] = normalized.split('/').map(Number)
+      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+        return null
+      }
+      return numerator / denominator
+    }
+
+    return null
+  }
+
+  function parseCeilingFeetFromMetar(rawMetar: string | undefined) {
+    if (!rawMetar) {
+      return null
+    }
+
+    const tokens = rawMetar.toUpperCase().split(/\s+/)
+    let ceilingFeet: number | null = null
+
+    for (const token of tokens) {
+      const match = token.match(/^(BKN|OVC|VV)(\d{3})(?:CB|TCU)?$/)
+      if (!match) {
+        continue
+      }
+
+      const heightHundreds = Number(match[2])
+      if (!Number.isFinite(heightHundreds)) {
+        continue
+      }
+
+      const heightFeet = heightHundreds * 100
+      ceilingFeet = ceilingFeet == null ? heightFeet : Math.min(ceilingFeet, heightFeet)
+    }
+
+    return ceilingFeet
+  }
+
+  function getFlightCategory(weather: WeatherResponse | null): FlightCategory {
+    const metar = weather?.metar
+    if (!metar) {
+      return 'Unknown'
+    }
+
+    const visibilitySm = parseVisibilitySm(metar.visib)
+    const ceilingFeet = parseCeilingFeetFromMetar(metar.rawOb)
+
+    if (visibilitySm == null && ceilingFeet == null) {
+      return 'Unknown'
+    }
+
+    if ((visibilitySm != null && visibilitySm < 1) || (ceilingFeet != null && ceilingFeet < 500)) {
+      return 'LIFR'
+    }
+
+    if ((visibilitySm != null && visibilitySm < 3) || (ceilingFeet != null && ceilingFeet < 1000)) {
+      return 'IFR'
+    }
+
+    if ((visibilitySm != null && visibilitySm <= 5) || (ceilingFeet != null && ceilingFeet <= 3000)) {
+      return 'MVFR'
+    }
+
+    return 'VFR'
   }
 
   function formatFrequencyType(type: string) {
@@ -2066,7 +2241,27 @@ function App() {
                               void selectMapAirportFromSearch(airport)
                             }}
                           >
-                            <span className="map-airport-search-ident">{airport.ident}</span>
+                            <span className="map-airport-search-ident-row">
+                              <span className="map-airport-search-ident">{airport.ident}</span>
+                              {(() => {
+                                const ident = airport.ident.toUpperCase()
+                                const isLoading = Boolean(mapAirportSearchFlightConditionsLoading[ident])
+                                const category = mapAirportSearchFlightConditions[ident] ?? 'Unknown'
+
+                                return (
+                                  <span
+                                    className={`map-airport-search-flight-badge ${
+                                      isLoading
+                                        ? 'map-airport-search-flight-badge-loading'
+                                        : `map-airport-search-flight-badge-${category.toLowerCase()}`
+                                    }`}
+                                    aria-label={isLoading ? 'Flight conditions loading' : `Flight conditions ${category}`}
+                                  >
+                                    {isLoading ? '...' : category}
+                                  </span>
+                                )
+                              })()}
+                            </span>
                             <span className="map-airport-search-name">{airport.name}</span>
                             <span className="map-airport-search-meta">
                               {[airport.city, airport.state, 'USA'].filter(Boolean).join(', ')}
@@ -2092,6 +2287,10 @@ function App() {
                     </div>
                     <button type="button" className="map-airport-info-close" onClick={clearSelectedMapAirport} aria-label="Close airport info">×</button>
                   </header>
+
+                  <div className={`map-airport-flight-conditions map-airport-flight-conditions-${selectedMapAirportFlightCategory.toLowerCase()}`}>
+                    {selectedMapAirportFlightCategory}
+                  </div>
 
                   <nav className="map-airport-tabs" aria-label="Airport detail tabs">
                     {mapAirportTabs.map((tab) => (
