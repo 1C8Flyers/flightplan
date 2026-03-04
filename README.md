@@ -29,6 +29,7 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 
 - API endpoint: `GET /api/data-cycle`
 - Response includes the detected NASR effective date and ZIP URL currently in use by the server.
+- Detailed NASR availability and current usage map: `docs/NASR_DATA_COVERAGE.md`
 
 ## Stack
 

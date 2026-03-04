@@ -485,7 +485,7 @@ async function fetchAirportFrequenciesDataset() {
         if (!line.startsWith('APT') || line.length < 1000) {
             continue;
         }
-        const siteKey = line.slice(3, 14);
+        const siteKey = line.slice(3, 14).trim();
         const airportIdent = line.slice(27, 31).trim().toUpperCase();
         const unicom = line.slice(981, 988).trim();
         const ctaf = line.slice(988, 995).trim();
@@ -517,7 +517,7 @@ async function fetchAirportFrequenciesDataset() {
         if (!line.startsWith('RMK') || line.length < 32) {
             continue;
         }
-        const siteKey = line.slice(3, 14);
+        const siteKey = line.slice(3, 14).trim();
         const airportIdent = airportIdentBySiteKey.get(siteKey);
         if (!airportIdent) {
             continue;
@@ -544,8 +544,42 @@ async function fetchAirportFrequenciesDataset() {
             });
         }
     }
+    const twrEntry = zip.getEntry('TWR.txt');
+    if (twrEntry) {
+        const twrText = zip.readAsText('TWR.txt');
+        const twrLines = twrText.split(/\r?\n/);
+        for (const line of twrLines) {
+            if (!line.startsWith('TWR7') || line.length < 117) {
+                continue;
+            }
+            const satelliteFrequencyText = line.slice(8, 52);
+            const satelliteUseText = line.slice(52, 102).trim();
+            const satelliteSiteKey = line.slice(102, 113).trim();
+            const satelliteIdent = line.slice(113, 117).trim().toUpperCase();
+            const airportIdent = knownAirportIdents.has(satelliteIdent)
+                ? satelliteIdent
+                : airportIdentBySiteKey.get(satelliteSiteKey) ?? null;
+            if (!airportIdent) {
+                continue;
+            }
+            const frequencyType = inferCommType(satelliteUseText) ?? 'APP';
+            const frequencyMatches = [...satelliteFrequencyText.toUpperCase().matchAll(commFrequencyRegex)];
+            for (const match of frequencyMatches) {
+                const rawFrequency = match[0];
+                const parsed = Number(rawFrequency);
+                if (Number.isNaN(parsed)) {
+                    continue;
+                }
+                frequencies.push({
+                    airportIdent,
+                    type: frequencyType,
+                    description: satelliteUseText || 'TWR7 satellite service',
+                    frequencyMHz: parsed.toFixed(3)
+                });
+            }
+        }
+    }
     const supplementalFiles = [
-        { name: 'TWR.txt', defaultType: 'TWR' },
         { name: 'COM.txt', defaultType: 'RDO' },
         { name: 'FSS.txt', defaultType: 'FSS' },
         { name: 'AWOS.txt', defaultType: 'AWOS' },
