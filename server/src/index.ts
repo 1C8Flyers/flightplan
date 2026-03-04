@@ -167,10 +167,10 @@ type TfrGeoJsonFeatureCollection = {
 }
 
 let faaCache: { loadedAt: number; delays: FaaDelay[] } | null = null
-let airportCache: { loadedAt: number; airports: AirportRecord[] } | null = null
-let navaidCache: { loadedAt: number; navaids: NavaidRecord[] } | null = null
-let airportFrequencyCache: { loadedAt: number; frequencies: AirportFrequencyRecord[] } | null = null
-let runwayCache: { loadedAt: number; runways: RunwayRecord[] } | null = null
+let airportCache: { loadedAt: number; effectiveDate: string; airports: AirportRecord[] } | null = null
+let navaidCache: { loadedAt: number; effectiveDate: string; navaids: NavaidRecord[] } | null = null
+let airportFrequencyCache: { loadedAt: number; effectiveDate: string; frequencies: AirportFrequencyRecord[] } | null = null
+let runwayCache: { loadedAt: number; effectiveDate: string; runways: RunwayRecord[] } | null = null
 let sectionalCache: { loadedAt: number; sectionals: SectionalChart[] } | null = null
 let windsAloftCache: { loadedAt: number; stations: WindsAloftStation[] } | null = null
 let tfrCache: { loadedAt: number; data: TfrGeoJsonFeatureCollection } | null = null
@@ -483,7 +483,12 @@ function routeProjection(depLat: number, depLon: number, arrLat: number, arrLon:
 
 async function fetchAirportsDataset() {
   const cacheWindowMs = 24 * 60 * 60 * 1000
-  if (airportCache && Date.now() - airportCache.loadedAt < cacheWindowMs) {
+  const cycle = await fetchCurrentNasrCycle()
+  if (
+    airportCache &&
+    airportCache.effectiveDate === cycle.effectiveDate &&
+    Date.now() - airportCache.loadedAt < cacheWindowMs
+  ) {
     return airportCache.airports
   }
 
@@ -526,7 +531,7 @@ async function fetchAirportsDataset() {
     })
   }
 
-  airportCache = { loadedAt: Date.now(), airports }
+  airportCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, airports }
   return airports
 }
 
@@ -616,7 +621,12 @@ function searchAirportsByQuery(query: string, airports: AirportRecord[]) {
 
 async function fetchNavaidsDataset() {
   const cacheWindowMs = 24 * 60 * 60 * 1000
-  if (navaidCache && Date.now() - navaidCache.loadedAt < cacheWindowMs) {
+  const cycle = await fetchCurrentNasrCycle()
+  if (
+    navaidCache &&
+    navaidCache.effectiveDate === cycle.effectiveDate &&
+    Date.now() - navaidCache.loadedAt < cacheWindowMs
+  ) {
     return navaidCache.navaids
   }
 
@@ -653,13 +663,18 @@ async function fetchNavaidsDataset() {
     })
   }
 
-  navaidCache = { loadedAt: Date.now(), navaids }
+  navaidCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, navaids }
   return navaids
 }
 
 async function fetchAirportFrequenciesDataset() {
   const cacheWindowMs = 24 * 60 * 60 * 1000
-  if (airportFrequencyCache && Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs) {
+  const cycle = await fetchCurrentNasrCycle()
+  if (
+    airportFrequencyCache &&
+    airportFrequencyCache.effectiveDate === cycle.effectiveDate &&
+    Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs
+  ) {
     return airportFrequencyCache.frequencies
   }
 
@@ -857,13 +872,18 @@ async function fetchAirportFrequenciesDataset() {
     }
   }
 
-  airportFrequencyCache = { loadedAt: Date.now(), frequencies }
+  airportFrequencyCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, frequencies }
   return frequencies
 }
 
 async function fetchRunwaysDataset() {
   const cacheWindowMs = 24 * 60 * 60 * 1000
-  if (runwayCache && Date.now() - runwayCache.loadedAt < cacheWindowMs) {
+  const cycle = await fetchCurrentNasrCycle()
+  if (
+    runwayCache &&
+    runwayCache.effectiveDate === cycle.effectiveDate &&
+    Date.now() - runwayCache.loadedAt < cacheWindowMs
+  ) {
     return runwayCache.runways
   }
 
@@ -920,7 +940,7 @@ async function fetchRunwaysDataset() {
     })
   }
 
-  runwayCache = { loadedAt: Date.now(), runways }
+  runwayCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, runways }
   return runways
 }
 

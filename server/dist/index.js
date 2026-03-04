@@ -297,7 +297,10 @@ function routeProjection(depLat, depLon, arrLat, arrLon, pointLat, pointLon) {
 }
 async function fetchAirportsDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
-    if (airportCache && Date.now() - airportCache.loadedAt < cacheWindowMs) {
+    const cycle = await fetchCurrentNasrCycle();
+    if (airportCache &&
+        airportCache.effectiveDate === cycle.effectiveDate &&
+        Date.now() - airportCache.loadedAt < cacheWindowMs) {
         return airportCache.airports;
     }
     const { zip } = await fetchNasrZip();
@@ -333,7 +336,7 @@ async function fetchAirportsDataset() {
             gpsCode: ident
         });
     }
-    airportCache = { loadedAt: Date.now(), airports };
+    airportCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, airports };
     return airports;
 }
 function normalizeSearchText(value) {
@@ -407,7 +410,10 @@ function searchAirportsByQuery(query, airports) {
 }
 async function fetchNavaidsDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
-    if (navaidCache && Date.now() - navaidCache.loadedAt < cacheWindowMs) {
+    const cycle = await fetchCurrentNasrCycle();
+    if (navaidCache &&
+        navaidCache.effectiveDate === cycle.effectiveDate &&
+        Date.now() - navaidCache.loadedAt < cacheWindowMs) {
         return navaidCache.navaids;
     }
     const { zip } = await fetchNasrZip();
@@ -438,12 +444,15 @@ async function fetchNavaidsDataset() {
             dmeFrequencyKhz
         });
     }
-    navaidCache = { loadedAt: Date.now(), navaids };
+    navaidCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, navaids };
     return navaids;
 }
 async function fetchAirportFrequenciesDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
-    if (airportFrequencyCache && Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs) {
+    const cycle = await fetchCurrentNasrCycle();
+    if (airportFrequencyCache &&
+        airportFrequencyCache.effectiveDate === cycle.effectiveDate &&
+        Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs) {
         return airportFrequencyCache.frequencies;
     }
     const { zip } = await fetchNasrZip();
@@ -622,12 +631,15 @@ async function fetchAirportFrequenciesDataset() {
             }
         }
     }
-    airportFrequencyCache = { loadedAt: Date.now(), frequencies };
+    airportFrequencyCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, frequencies };
     return frequencies;
 }
 async function fetchRunwaysDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
-    if (runwayCache && Date.now() - runwayCache.loadedAt < cacheWindowMs) {
+    const cycle = await fetchCurrentNasrCycle();
+    if (runwayCache &&
+        runwayCache.effectiveDate === cycle.effectiveDate &&
+        Date.now() - runwayCache.loadedAt < cacheWindowMs) {
         return runwayCache.runways;
     }
     const { zip } = await fetchNasrZip();
@@ -676,7 +688,7 @@ async function fetchRunwaysDataset() {
             heHeadingDeg: null
         });
     }
-    runwayCache = { loadedAt: Date.now(), runways };
+    runwayCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, runways };
     return runways;
 }
 function rankFrequencyType(type) {
