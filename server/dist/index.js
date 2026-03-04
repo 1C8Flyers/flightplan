@@ -53,6 +53,7 @@ let navaidCache = null;
 let airportFrequencyCache = null;
 let sectionalCache = null;
 let windsAloftCache = null;
+let tfrCache = null;
 const sectionalGeoTiffCache = new Map();
 const sectionalOverlayCache = new Map();
 const landmarkCache = new Map();
@@ -67,6 +68,34 @@ async function fetchJson(url) {
         return [];
     }
     return JSON.parse(text);
+}
+async function fetchTfrGeoJson() {
+    const cacheWindowMs = 5 * 60 * 1000;
+    if (tfrCache && Date.now() - tfrCache.loadedAt < cacheWindowMs) {
+        return tfrCache.data;
+    }
+    const featureServiceQueryUrl = process.env.FAA_TFR_FEATURE_SERVICE_URL
+        ?? 'https://services1.arcgis.com/fXHQyq63u0UsTeSM/arcgis/rest/services/FAA_TFR_AutoUpdate/FeatureServer/0/query';
+    const queryUrl = `${featureServiceQueryUrl}?${new URLSearchParams({
+        where: '1=1',
+        outFields: '*',
+        outSR: '4326',
+        f: 'geojson'
+    }).toString()}`;
+    const response = await fetch(queryUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+        throw new Error(`TFR feed request failed (${response.status})`);
+    }
+    const parsed = await response.json();
+    const data = {
+        type: 'FeatureCollection',
+        features: Array.isArray(parsed?.features) ? parsed.features : []
+    };
+    tfrCache = {
+        loadedAt: Date.now(),
+        data
+    };
+    return data;
 }
 async function fetchFaaDelays() {
     const cacheWindowMs = 2 * 60 * 1000;
@@ -151,13 +180,16 @@ function routeProjection(depLat, depLon, arrLat, arrLon, pointLat, pointLon) {
     const wy = pointY - depY;
     const len2 = vx * vx + vy * vy;
     if (len2 === 0) {
-        return { progress: 0, crossTrackNm: Number.POSITIVE_INFINITY };
+        return { progress: 0, crossTrackNm: Number.POSITIVE_INFINITY, crossTrackSignedNm: 0 };
     }
     const progress = Math.max(0, Math.min(1, (wx * vx + wy * vy) / len2));
     const closestX = depX + progress * vx;
     const closestY = depY + progress * vy;
-    const crossTrackNm = Math.sqrt((pointX - closestX) ** 2 + (pointY - closestY) ** 2);
-    return { progress, crossTrackNm };
+    const dx = pointX - closestX;
+    const dy = pointY - closestY;
+    const crossTrackNm = Math.sqrt(dx ** 2 + dy ** 2);
+    const crossTrackSignedNm = (vx * dy - vy * dx) / Math.sqrt(len2);
+    return { progress, crossTrackNm, crossTrackSignedNm };
 }
 async function fetchAirportsDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
@@ -173,6 +205,8 @@ async function fetchAirportsDataset() {
     const headers = parseCsvLine(rows[0]);
     const identIndex = headers.indexOf('ident');
     const nameIndex = headers.indexOf('name');
+    const municipalityIndex = headers.indexOf('municipality');
+    const isoRegionIndex = headers.indexOf('iso_region');
     const latIndex = headers.indexOf('latitude_deg');
     const lonIndex = headers.indexOf('longitude_deg');
     const typeIndex = headers.indexOf('type');
@@ -189,6 +223,8 @@ async function fetchAirportsDataset() {
         const cols = parseCsvLine(row);
         const ident = cols[identIndex] ?? '';
         const name = cols[nameIndex] ?? '';
+        const municipality = cols[municipalityIndex] ? cols[municipalityIndex].trim() : null;
+        const isoRegion = cols[isoRegionIndex] ? cols[isoRegionIndex].trim() : null;
         const type = cols[typeIndex] ?? '';
         const lat = Number(cols[latIndex]);
         const lon = Number(cols[lonIndex]);
@@ -202,10 +238,79 @@ async function fetchAirportsDataset() {
         if (isoCountry !== 'US') {
             continue;
         }
-        airports.push({ ident, name, lat, lon, type, isoCountry, iataCode, localCode, gpsCode });
+        airports.push({ ident, name, municipality, isoRegion, lat, lon, type, isoCountry, iataCode, localCode, gpsCode });
     }
     airportCache = { loadedAt: Date.now(), airports };
     return airports;
+}
+function normalizeSearchText(value) {
+    return value.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function searchAirportsByQuery(query, airports) {
+    const normalizedQuery = normalizeSearchText(query);
+    const uppercaseQuery = query.trim().toUpperCase();
+    const tokens = normalizedQuery.split(' ').filter(Boolean);
+    if (!normalizedQuery || !uppercaseQuery) {
+        return [];
+    }
+    return airports
+        .filter((airport) => ['small_airport', 'medium_airport', 'large_airport', 'seaplane_base'].includes(airport.type))
+        .map((airport) => {
+        const ident = airport.ident.toUpperCase();
+        const gps = airport.gpsCode?.toUpperCase() ?? '';
+        const iata = airport.iataCode?.toUpperCase() ?? '';
+        const local = airport.localCode?.toUpperCase() ?? '';
+        const name = normalizeSearchText(airport.name);
+        const city = normalizeSearchText(airport.municipality ?? '');
+        let score = 0;
+        if ([ident, gps, iata, local].includes(uppercaseQuery)) {
+            score = 120;
+        }
+        else if ([ident, gps, iata, local].some((value) => Boolean(value) && value.startsWith(uppercaseQuery))) {
+            score = 95;
+        }
+        else if (name.startsWith(normalizedQuery)) {
+            score = 80;
+        }
+        else if (city.startsWith(normalizedQuery)) {
+            score = 75;
+        }
+        else if (name.includes(normalizedQuery)) {
+            score = 68;
+        }
+        else if (city.includes(normalizedQuery)) {
+            score = 63;
+        }
+        if (tokens.length > 1) {
+            const tokenMatches = tokens.filter((token) => name.includes(token) || city.includes(token)).length;
+            if (tokenMatches === tokens.length) {
+                score = Math.max(score, 56 + tokenMatches);
+            }
+        }
+        if (score <= 0) {
+            return null;
+        }
+        const state = airport.isoRegion?.startsWith('US-') ? airport.isoRegion.slice(3) : null;
+        return {
+            ident,
+            name: airport.name,
+            city: airport.municipality,
+            state,
+            lat: airport.lat,
+            lon: airport.lon,
+            type: airport.type,
+            score
+        };
+    })
+        .filter((value) => Boolean(value))
+        .sort((a, b) => {
+        if (b.score !== a.score) {
+            return b.score - a.score;
+        }
+        return a.name.localeCompare(b.name);
+    })
+        .slice(0, 12)
+        .map(({ score, ...airport }) => airport);
 }
 async function fetchNavaidsDataset() {
     const cacheWindowMs = 24 * 60 * 60 * 1000;
@@ -375,6 +480,37 @@ async function resolveAirport(code) {
         station = await fetchStationByCandidateCodes(dataset.ident);
     }
     return { inputCode, station, dataset };
+}
+function resolveWaypointIdentInDatasets(ident, airports, navaids) {
+    const normalized = ident.toUpperCase().trim();
+    if (!normalized) {
+        return null;
+    }
+    const airport = findAirportInDataset(normalized, airports);
+    if (airport) {
+        return {
+            inputIdent: normalized,
+            ident: airport.ident.toUpperCase(),
+            name: airport.name,
+            lat: airport.lat,
+            lon: airport.lon,
+            source: 'airport',
+            navaidType: null
+        };
+    }
+    const navaid = navaids.find((candidate) => candidate.ident.toUpperCase() === normalized);
+    if (navaid) {
+        return {
+            inputIdent: normalized,
+            ident: navaid.ident.toUpperCase(),
+            name: navaid.name,
+            lat: navaid.lat,
+            lon: navaid.lon,
+            source: 'navaid',
+            navaidType: navaid.type
+        };
+    }
+    return null;
 }
 function decodeWindGroup(group, altitudeFt) {
     if (!group || group === '//////') {
@@ -573,11 +709,12 @@ function toMorsePattern(value) {
         .filter(Boolean)
         .join(' ');
 }
-function selectRouteNavaids(routePoints, navaids) {
+const routeNavaidTypeOptions = ['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'];
+function selectRouteNavaids(routePoints, navaids, includedTypes = [...routeNavaidTypeOptions]) {
     if (routePoints.length < 2) {
         return [];
     }
-    const allowedTypes = new Set(['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME']);
+    const allowedTypes = new Set(includedTypes.length > 0 ? includedTypes : routeNavaidTypeOptions);
     const byIdent = new Map();
     for (let legIndex = 0; legIndex < routePoints.length - 1; legIndex += 1) {
         const dep = routePoints[legIndex];
@@ -590,7 +727,8 @@ function selectRouteNavaids(routePoints, navaids) {
             return {
                 ...navaid,
                 progress: projection.progress,
-                crossTrackNm: projection.crossTrackNm
+                crossTrackNm: projection.crossTrackNm,
+                crossTrackSignedNm: projection.crossTrackSignedNm
             };
         })
             .filter((candidate) => candidate.progress >= 0 && candidate.progress <= 1)
@@ -608,6 +746,11 @@ function selectRouteNavaids(routePoints, navaids) {
                     dmeFrequencyKhz: candidate.dmeFrequencyKhz,
                     morse: toMorsePattern(candidate.ident),
                     closestDistanceNm: Number(candidate.crossTrackNm.toFixed(1)),
+                    offRouteDirection: Math.abs(candidate.crossTrackSignedNm) < 0.05
+                        ? 'center'
+                        : candidate.crossTrackSignedNm > 0
+                            ? 'left'
+                            : 'right',
                     legIndex: legIndex + 1
                 });
             }
@@ -721,6 +864,67 @@ async function fetchSectionalCharts() {
 }
 app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
+});
+app.get('/api/airport/nearest', async (req, res) => {
+    try {
+        const lat = Number(req.query.lat);
+        const lon = Number(req.query.lon);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) {
+            res.status(400).json({ error: 'lat and lon query params are required.' });
+            return;
+        }
+        const airports = await fetchAirportsDataset();
+        const candidates = airports
+            .filter((airport) => airport.isoCountry === 'US' && airport.ident && airport.lat && airport.lon)
+            .map((airport) => ({
+            airport,
+            distanceNm: haversineNm(lat, lon, airport.lat, airport.lon)
+        }))
+            .sort((a, b) => a.distanceNm - b.distanceNm);
+        const nearest = candidates[0];
+        if (!nearest) {
+            res.status(404).json({ error: 'No nearby airport found.' });
+            return;
+        }
+        const resolved = await resolveAirport(nearest.airport.ident);
+        const station = resolved.station;
+        const dataset = resolved.dataset ?? nearest.airport;
+        const faaDelays = await fetchFaaDelays();
+        const delayCandidates = [
+            station?.faaId,
+            station?.iataId,
+            station?.icaoId,
+            station?.icaoId?.replace(/^K/, ''),
+            dataset?.ident,
+            dataset?.localCode,
+            dataset?.iataCode,
+            dataset?.gpsCode,
+        ]
+            .filter(Boolean)
+            .map((value) => String(value).toUpperCase());
+        const matchingDelays = faaDelays.filter((delay) => delayCandidates.includes(delay.airportCode));
+        res.json({
+            airport: {
+                icao: station?.icaoId ?? dataset?.gpsCode ?? dataset?.ident,
+                iata: station?.iataId ?? dataset?.iataCode ?? null,
+                faa: station?.faaId ?? dataset?.localCode ?? null,
+                name: station?.site ?? dataset?.name,
+                lat: station?.lat ?? dataset?.lat,
+                lon: station?.lon ?? dataset?.lon,
+                elevationMeters: station?.elev ?? null,
+                state: station?.state ?? null,
+                country: station?.country ?? dataset?.isoCountry ?? null
+            },
+            distanceNm: Number(nearest.distanceNm.toFixed(1)),
+            faa: {
+                hasDelay: matchingDelays.length > 0,
+                delays: matchingDelays
+            }
+        });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 app.get('/api/airport/:icao', async (req, res) => {
     try {
@@ -882,6 +1086,48 @@ app.get('/api/route/suggestions', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+app.get('/api/waypoints/resolve', async (req, res) => {
+    try {
+        const rawIdents = String(req.query.idents ?? '').trim();
+        if (!rawIdents) {
+            res.json({ waypoints: [] });
+            return;
+        }
+        const idents = rawIdents
+            .split(',')
+            .map((value) => value.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .slice(0, 50);
+        if (!idents.length) {
+            res.json({ waypoints: [] });
+            return;
+        }
+        const [airports, navaids] = await Promise.all([fetchAirportsDataset(), fetchNavaidsDataset()]);
+        const waypoints = idents
+            .map((ident) => resolveWaypointIdentInDatasets(ident, airports, navaids))
+            .filter((value) => Boolean(value));
+        res.json({ waypoints });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/airports/search', async (req, res) => {
+    try {
+        const query = String(req.query.q ?? '').trim();
+        if (query.length < 2) {
+            res.json({ airports: [] });
+            return;
+        }
+        const airports = await fetchAirportsDataset();
+        const matches = searchAirportsByQuery(query, airports);
+        res.json({ airports: matches });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 app.get('/api/sectionals', async (_req, res) => {
     try {
         const sectionals = await fetchSectionalCharts();
@@ -894,6 +1140,7 @@ app.get('/api/sectionals', async (_req, res) => {
 app.get('/api/navaids/route', async (req, res) => {
     try {
         const rawPoints = String(req.query.points ?? '').trim();
+        const rawTypes = String(req.query.types ?? '').trim();
         if (!rawPoints) {
             res.status(400).json({ error: 'points query is required.' });
             return;
@@ -914,7 +1161,14 @@ app.get('/api/navaids/route', async (req, res) => {
             return;
         }
         const navaids = await fetchNavaidsDataset();
-        const routeNavaids = selectRouteNavaids(routePoints, navaids);
+        const requestedTypes = rawTypes
+            ? rawTypes
+                .split(',')
+                .map((value) => value.trim().toUpperCase())
+                .filter(Boolean)
+            : [...routeNavaidTypeOptions];
+        const includedTypes = requestedTypes.filter((type, index) => routeNavaidTypeOptions.includes(type) && requestedTypes.indexOf(type) === index);
+        const routeNavaids = selectRouteNavaids(routePoints, navaids, includedTypes);
         res.json({ navaids: routeNavaids });
     }
     catch (error) {
@@ -1246,6 +1500,15 @@ app.get('/api/landmark-name', async (req, res) => {
             result
         });
         res.json(result);
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/tfrs', async (_req, res) => {
+    try {
+        const data = await fetchTfrGeoJson();
+        res.json(data);
     }
     catch (error) {
         res.status(500).json({ error: error.message });

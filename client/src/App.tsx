@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
+import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
 
 type AirportResponse = {
   airport: {
@@ -25,6 +26,10 @@ type AirportResponse = {
       trend: string
     }>
   }
+}
+
+type NearestAirportResponse = AirportResponse & {
+  distanceNm: number
 }
 
 type WeatherResponse = {
@@ -61,14 +66,6 @@ type SuggestedWaypoint = {
   progress: number
 }
 
-type SectionalChart = {
-  name: string
-  effectiveDate: string
-  url: string
-  centerLat: number | null
-  centerLon: number | null
-}
-
 type WindsAloftResponse = {
   station: string
   stationLat: number
@@ -84,11 +81,6 @@ type WindsAloftResponse = {
 type MagneticVariationResponse = {
   declination: number
   convention: string
-}
-
-type SectionalOverlayMetadata = {
-  bounds: [[number, number], [number, number]]
-  imageUrl: string
 }
 
 type AirportDiagramResponse = {
@@ -117,6 +109,7 @@ type RouteNavaid = {
   dmeFrequencyKhz: number | null
   morse: string
   closestDistanceNm: number
+  offRouteDirection?: 'left' | 'right' | 'center'
   legIndex: number
 }
 
@@ -124,6 +117,27 @@ type LandmarkNameResponse = {
   ident: string | null
   label: string | null
   source: string | null
+}
+
+type ResolvedWaypoint = {
+  inputIdent: string
+  ident: string
+  name: string
+  lat: number
+  lon: number
+  source: 'airport' | 'navaid'
+  navaidType: string | null
+}
+
+type WaypointResolveResponse = {
+  waypoints: ResolvedWaypoint[]
+}
+
+type WaypointChip = {
+  key: string
+  label: string
+  detail: string
+  status: 'resolved' | 'manual' | 'unknown' | 'invalid'
 }
 
 type Point = {
@@ -157,6 +171,17 @@ type Leg = {
   fuelGallons: number
 }
 
+type TfrFeatureCollection = {
+  type: 'FeatureCollection'
+  features: Array<{
+    type: 'Feature'
+    geometry: unknown
+    properties: Record<string, unknown>
+  }>
+}
+
+const routeNavaidTypeOptions = ['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'] as const
+
 function toRad(degrees: number) {
   return (degrees * Math.PI) / 180
 }
@@ -168,6 +193,41 @@ function toDeg(radians: number) {
 function normalizeHeading(degrees: number) {
   const normalized = degrees % 360
   return normalized < 0 ? normalized + 360 : normalized
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function buildTfrPopupHtml(properties: Record<string, unknown>) {
+  const title = String(properties.TITLE ?? properties.NAME ?? properties.NOTAM_KEY ?? 'TFR')
+  const notam = String(properties.NOTAM_KEY ?? properties.GID ?? 'N/A')
+  const state = String(properties.STATE ?? properties.CITY ?? 'N/A')
+  const legal = String(properties.LEGAL ?? properties.TYPE_CODE ?? '')
+  const modifiedRaw = properties.LAST_MODIFICATION_DATETIME ?? properties.NOTEBOOK_UPDATE_DATETIME ?? null
+  const modifiedTimestamp = typeof modifiedRaw === 'number'
+    ? modifiedRaw
+    : typeof modifiedRaw === 'string'
+      ? Date.parse(modifiedRaw)
+      : Number.NaN
+  const modified = modifiedRaw
+    ? Number.isNaN(modifiedTimestamp) ? String(modifiedRaw) : new Date(modifiedTimestamp).toLocaleString()
+    : 'N/A'
+
+  return [
+    `<div class="tfr-popup">`,
+    `<strong>${escapeHtml(title)}</strong>`,
+    `<div>NOTAM: ${escapeHtml(notam)}</div>`,
+    `<div>Area: ${escapeHtml(state)}</div>`,
+    legal ? `<div>${escapeHtml(legal)}</div>` : '',
+    `<div>Updated: ${escapeHtml(modified)}</div>`,
+    `</div>`
+  ].join('')
 }
 
 function haversineNm(from: Point, to: Point) {
@@ -262,13 +322,17 @@ function App() {
   const [departure, setDeparture] = useState('KOSH')
   const [arrival, setArrival] = useState('KMSN')
   const [waypointsInput, setWaypointsInput] = useState('')
+  const [waypointDraft, setWaypointDraft] = useState('')
+  const [waypointChips, setWaypointChips] = useState<WaypointChip[]>([])
+  const [draggingWaypointIndex, setDraggingWaypointIndex] = useState<number | null>(null)
+  const [dragOverWaypointIndex, setDragOverWaypointIndex] = useState<number | null>(null)
   const [cruiseAltitudeFt, setCruiseAltitudeFt] = useState(3000)
   const [tas, setTas] = useState(110)
   const [compassDeviation, setCompassDeviation] = useState(0)
   const [fuelBurn, setFuelBurn] = useState(9)
+  const [includedNavaidTypes, setIncludedNavaidTypes] = useState<string[]>(['VOR', 'VOR-DME'])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activeStep, setActiveStep] = useState<'plan' | 'review' | 'print'>('plan')
   const [showRawWeather, setShowRawWeather] = useState(false)
   const [showAdvancedNav, setShowAdvancedNav] = useState(false)
   const [showFaaDelayDetails, setShowFaaDelayDetails] = useState(false)
@@ -286,23 +350,39 @@ function App() {
   const [depFrequencies, setDepFrequencies] = useState<FrequencyResponse['frequencies']>([])
   const [arrFrequencies, setArrFrequencies] = useState<FrequencyResponse['frequencies']>([])
   const [suggestedWaypoints, setSuggestedWaypoints] = useState<SuggestedWaypoint[]>([])
-  const [sectionals, setSectionals] = useState<SectionalChart[]>([])
-  const [selectedSectionalUrl, setSelectedSectionalUrl] = useState('')
   const [windsAloft, setWindsAloft] = useState<WindsAloftResponse | null>(null)
   const [legs, setLegs] = useState<Leg[]>([])
-  const [routePoints, setRoutePoints] = useState<Point[]>([])
-  const [mapLoading, setMapLoading] = useState(false)
-  const [mapError, setMapError] = useState<string | null>(null)
   const [printableDiagrams, setPrintableDiagrams] = useState<PrintableDiagram[]>([])
   const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
   const [routeNavaids, setRouteNavaids] = useState<RouteNavaid[]>([])
+  const [routePoints, setRoutePoints] = useState<Point[]>([])
+  const [selectedMapAirport, setSelectedMapAirport] = useState<AirportResponse | null>(null)
+  const [selectedMapAirportDistanceNm, setSelectedMapAirportDistanceNm] = useState<number | null>(null)
+  const [selectedMapAirportWeather, setSelectedMapAirportWeather] = useState<WeatherResponse | null>(null)
+  const [selectedMapAirportError, setSelectedMapAirportError] = useState<string | null>(null)
+  const [showTfrOverlay, setShowTfrOverlay] = useState(true)
+  const [planLayerId, setPlanLayerId] = useState(() => {
+    if (typeof window === 'undefined') {
+      return defaultFaaChartLayerId
+    }
 
+    const stored = window.localStorage.getItem('navlog:charts:selected-layer')
+    if (stored && faaCharts.some((layer) => layer.id === stored)) {
+      return stored
+    }
+
+    return defaultFaaChartLayerId
+  })
+  const [planMapError, setPlanMapError] = useState<string | null>(null)
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
+
+  const recalcRequestIdRef = useRef(0)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
-  const rasterLayerRef = useRef<any>(null)
+  const chartLayerRef = useRef<any>(null)
+  const tfrLayerRef = useRef<any>(null)
   const routeLayerRef = useRef<any>(null)
   const markerLayerRef = useRef<any>(null)
-  const recalcRequestIdRef = useRef(0)
 
   const totals = useMemo(() => {
     const totalDistance = legs.reduce((sum, leg) => sum + leg.distanceNm, 0)
@@ -312,6 +392,81 @@ function App() {
   }, [legs])
 
   const hasNavData = Boolean(legs.length > 0 && depAirport && arrAirport)
+  const waypointLines = useMemo(
+    () => waypointsInput.split('\n').map((line) => line.trim()).filter(Boolean),
+    [waypointsInput]
+  )
+  const selectedPlanLayer = useMemo(
+    () => faaCharts.find((layer) => layer.id === planLayerId) ?? faaCharts[0],
+    [planLayerId]
+  )
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('navlog:charts:selected-layer', planLayerId)
+    }
+  }, [planLayerId])
+
+  useEffect(() => {
+    const depCode = departure.trim().toUpperCase()
+    const arrCode = arrival.trim().toUpperCase()
+
+    if (depCode.length < 3 || arrCode.length < 3) {
+      return
+    }
+
+    let cancelled = false
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const [depAirportResponse, arrAirportResponse] = await Promise.all([
+          fetchJson<AirportResponse>(`/api/airport/${depCode}`),
+          fetchJson<AirportResponse>(`/api/airport/${arrCode}`)
+        ])
+
+        if (cancelled) {
+          return
+        }
+
+        setDepAirport(depAirportResponse)
+        setArrAirport(arrAirportResponse)
+
+        const userWaypoints = await parseWaypointLines(waypointsInput)
+
+        if (cancelled) {
+          return
+        }
+
+        const points: Point[] = [
+          {
+            ident: depAirportResponse.airport.icao,
+            lat: depAirportResponse.airport.lat,
+            lon: depAirportResponse.airport.lon,
+            originalIdent: depAirportResponse.airport.icao,
+            originalLat: depAirportResponse.airport.lat,
+            originalLon: depAirportResponse.airport.lon
+          },
+          ...userWaypoints,
+          {
+            ident: arrAirportResponse.airport.icao,
+            lat: arrAirportResponse.airport.lat,
+            lon: arrAirportResponse.airport.lon,
+            originalIdent: arrAirportResponse.airport.icao,
+            originalLat: arrAirportResponse.airport.lat,
+            originalLon: arrAirportResponse.airport.lon
+          }
+        ]
+
+        setRoutePoints(points)
+        setError(null)
+      } catch {
+      }
+    }, 350)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [departure, arrival, waypointsInput])
 
   async function fetchJson<T>(path: string): Promise<T> {
     const response = await fetch(path)
@@ -322,28 +477,127 @@ function App() {
     return response.json() as Promise<T>
   }
 
-  function parseWaypointLines(): Point[] {
-    return waypointsInput
+  function recenterToUserLocation(showErrorOnFailure = true) {
+    if (!navigator.geolocation) {
+      if (showErrorOnFailure) {
+        setPlanMapError('Geolocation is not available in this browser.')
+      }
+
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          lat: position.coords.latitude,
+          lon: position.coords.longitude
+        }
+
+        setUserLocation(location)
+
+        if (mapRef.current) {
+          mapRef.current.setView([location.lat, location.lon], Math.max(selectedPlanLayer.minZoom, 8))
+        }
+
+        setPlanMapError(null)
+      },
+      () => {
+        if (showErrorOnFailure) {
+          setPlanMapError('Unable to access your location. Check browser location permissions.')
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 6000,
+        maximumAge: 300000
+      }
+    )
+  }
+
+  async function parseWaypointLines(input = waypointsInput): Promise<Point[]> {
+    const lines = input
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => {
-        const [ident, latText, lonText] = line.split(',').map((value) => value.trim())
+
+    if (!lines.length) {
+      return []
+    }
+
+    const parsed = lines.map((line) => {
+      const parts = line.split(',').map((value) => value.trim())
+
+      if (parts.length === 1 && parts[0]) {
+        return { kind: 'ident' as const, inputIdent: parts[0].toUpperCase() }
+      }
+
+      if (parts.length === 3) {
+        const [ident, latText, lonText] = parts
         const lat = Number(latText)
         const lon = Number(lonText)
+
         if (!ident || Number.isNaN(lat) || Number.isNaN(lon)) {
-          throw new Error('Waypoint format must be IDENT,lat,lon (example: RIPON,43.84,-88.84).')
+          throw new Error(`Invalid waypoint line: ${line}`)
         }
+
         const normalizedIdent = ident.toUpperCase()
         return {
-          ident: normalizedIdent,
-          lat,
-          lon,
-          originalIdent: normalizedIdent,
-          originalLat: lat,
-          originalLon: lon
+          kind: 'point' as const,
+          point: {
+            ident: normalizedIdent,
+            lat,
+            lon,
+            originalIdent: normalizedIdent,
+            originalLat: lat,
+            originalLon: lon
+          }
         }
+      }
+
+      throw new Error(`Invalid waypoint line: ${line}`)
+    })
+
+    const unresolvedIdents = parsed
+      .filter((item): item is { kind: 'ident'; inputIdent: string } => item.kind === 'ident')
+      .map((item) => item.inputIdent)
+
+    const resolvedByInput = new Map<string, ResolvedWaypoint>()
+
+    if (unresolvedIdents.length) {
+      const uniqueIdents = Array.from(new Set(unresolvedIdents))
+      const response = await fetchJson<WaypointResolveResponse>(
+        `/api/waypoints/resolve?idents=${encodeURIComponent(uniqueIdents.join(','))}`
+      )
+
+      response.waypoints.forEach((waypoint) => {
+        resolvedByInput.set(waypoint.inputIdent.toUpperCase(), waypoint)
       })
+
+      const missing = uniqueIdents.filter((ident) => !resolvedByInput.has(ident))
+      if (missing.length) {
+        throw new Error(`Unrecognized waypoint ident(s): ${missing.join(', ')}`)
+      }
+    }
+
+    return parsed.map((item) => {
+      if (item.kind === 'point') {
+        return item.point
+      }
+
+      const resolved = resolvedByInput.get(item.inputIdent)
+      if (!resolved) {
+        throw new Error(`Unrecognized waypoint ident: ${item.inputIdent}`)
+      }
+
+      return {
+        ident: resolved.ident,
+        lat: resolved.lat,
+        lon: resolved.lon,
+        originalIdent: resolved.ident,
+        originalLat: resolved.lat,
+        originalLon: resolved.lon
+      }
+    })
   }
 
   function useSuggestedWaypointLines() {
@@ -351,11 +605,107 @@ function App() {
       return
     }
 
-    const value = suggestedWaypoints
-      .map((waypoint) => `${waypoint.ident},${waypoint.lat.toFixed(6)},${waypoint.lon.toFixed(6)}`)
-      .join('\n')
+    const lines = suggestedWaypoints.map((waypoint) => waypoint.ident)
+    setWaypointLines(lines)
+  }
 
-    setWaypointsInput(value)
+  async function syncRouteFromWaypointLines(lines: string[]) {
+    if (!depAirport || !arrAirport) {
+      return
+    }
+
+    try {
+      const waypointText = lines.join('\n')
+      const userWaypoints = await parseWaypointLines(waypointText)
+      const points: Point[] = [
+        {
+          ident: depAirport.airport.icao,
+          lat: depAirport.airport.lat,
+          lon: depAirport.airport.lon,
+          originalIdent: depAirport.airport.icao,
+          originalLat: depAirport.airport.lat,
+          originalLon: depAirport.airport.lon
+        },
+        ...userWaypoints,
+        {
+          ident: arrAirport.airport.icao,
+          lat: arrAirport.airport.lat,
+          lon: arrAirport.airport.lon,
+          originalIdent: arrAirport.airport.icao,
+          originalLat: arrAirport.airport.lat,
+          originalLon: arrAirport.airport.lon
+        }
+      ]
+
+      setRoutePoints(points)
+      await Promise.all([
+        recomputeRouteCalculations(points),
+        loadRouteNavaids(points)
+      ])
+    } catch {
+    }
+  }
+
+  function setWaypointLines(lines: string[]) {
+    setWaypointsInput(lines.join('\n'))
+    void syncRouteFromWaypointLines(lines)
+  }
+
+  function appendWaypointDraft() {
+    const value = waypointDraft.trim()
+    if (!value) {
+      return
+    }
+
+    setWaypointLines([...waypointLines, value])
+    setWaypointDraft('')
+  }
+
+  function removeLastWaypointChip() {
+    if (!waypointLines.length) {
+      return
+    }
+
+    setWaypointLines(waypointLines.slice(0, -1))
+  }
+
+  function removeWaypointChip(index: number) {
+    setWaypointLines(waypointLines.filter((_line, lineIndex) => lineIndex !== index))
+  }
+
+  function reorderWaypointChips(targetIndex: number) {
+    if (draggingWaypointIndex == null || draggingWaypointIndex === targetIndex) {
+      setDraggingWaypointIndex(null)
+      setDragOverWaypointIndex(null)
+      return
+    }
+
+    const nextLines = [...waypointLines]
+    const [dragged] = nextLines.splice(draggingWaypointIndex, 1)
+    if (dragged == null) {
+      setDraggingWaypointIndex(null)
+      setDragOverWaypointIndex(null)
+      return
+    }
+
+    const insertionIndex = draggingWaypointIndex < targetIndex ? targetIndex - 1 : targetIndex
+    nextLines.splice(Math.max(0, insertionIndex), 0, dragged)
+    setDraggingWaypointIndex(null)
+    setDragOverWaypointIndex(null)
+    setWaypointLines(nextLines)
+  }
+
+  function updateTouchDragTarget(clientX: number, clientY: number) {
+    const target = document.elementFromPoint(clientX, clientY)
+    const chipElement = target instanceof HTMLElement ? target.closest('[data-waypoint-chip-index]') : null
+    if (!chipElement || !(chipElement instanceof HTMLElement)) {
+      return
+    }
+
+    const index = Number(chipElement.dataset.waypointChipIndex)
+    if (!Number.isNaN(index)) {
+      setDragOverWaypointIndex(index)
+    }
   }
 
   function toWaypointInputFromRoute(points: Point[]) {
@@ -415,7 +765,31 @@ function App() {
     return `${navaid.frequencyKhz} kHz`
   }
 
-  async function loadRouteNavaids(points: Point[]) {
+  function formatOffRoute(navaid: RouteNavaid) {
+    const legFrom = routePoints[navaid.legIndex - 1]
+    const legTo = routePoints[navaid.legIndex]
+
+    if (!legFrom || !legTo || !navaid.offRouteDirection) {
+      return `? ${navaid.closestDistanceNm.toFixed(1)} NM`
+    }
+
+    if (navaid.offRouteDirection === 'center') {
+      return `ON ROUTE ${navaid.closestDistanceNm.toFixed(1)} NM`
+    }
+
+    const legCourse = initialBearing(legFrom, legTo)
+    const perpendicularBearing = normalizeHeading(
+      navaid.offRouteDirection === 'left' ? legCourse - 90 : legCourse + 90
+    )
+
+    const cardinalLabels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    const cardinalIndex = Math.round(perpendicularBearing / 45) % 8
+    const cardinal = cardinalLabels[cardinalIndex]
+
+    return `${cardinal} ${navaid.closestDistanceNm.toFixed(1)} NM`
+  }
+
+  async function loadRouteNavaids(points: Point[], navaidTypes: string[] = includedNavaidTypes) {
     if (points.length < 2) {
       setRouteNavaids([])
       return
@@ -423,11 +797,32 @@ function App() {
 
     try {
       const pointsParam = points.map((point) => `${point.lat.toFixed(6)},${point.lon.toFixed(6)}`).join(';')
-      const response = await fetchJson<{ navaids: RouteNavaid[] }>(`/api/navaids/route?points=${encodeURIComponent(pointsParam)}`)
+      const typesParam = navaidTypes.join(',')
+      const response = await fetchJson<{ navaids: RouteNavaid[] }>(
+        `/api/navaids/route?points=${encodeURIComponent(pointsParam)}&types=${encodeURIComponent(typesParam)}`
+      )
       setRouteNavaids(response.navaids)
     } catch {
       setRouteNavaids([])
     }
+  }
+
+  function toggleIncludedNavaidType(type: string, enabled: boolean) {
+    setIncludedNavaidTypes((current) => {
+      const nextSet = new Set(current)
+      if (enabled) {
+        nextSet.add(type)
+      } else {
+        nextSet.delete(type)
+      }
+
+      const next = routeNavaidTypeOptions.filter((option) => nextSet.has(option))
+      if (routePoints.length >= 2) {
+        void loadRouteNavaids(routePoints, next)
+      }
+
+      return next
+    })
   }
 
   async function loadPrintableDiagrams(depAirportResponse: AirportResponse, arrAirportResponse: AirportResponse) {
@@ -465,6 +860,125 @@ function App() {
       setPrintDiagramsLoading(false)
     }
   }
+
+  useEffect(() => {
+    const rawLines = waypointsInput
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+
+    if (!rawLines.length) {
+      setWaypointChips([])
+      return
+    }
+
+    let cancelled = false
+    const timeoutId = window.setTimeout(async () => {
+      const identInputs: string[] = []
+      const lineDescriptors = rawLines.map((line, index) => {
+        const parts = line.split(',').map((value) => value.trim())
+
+        if (parts.length === 1 && parts[0]) {
+          const inputIdent = parts[0].toUpperCase()
+          identInputs.push(inputIdent)
+          return { index, kind: 'ident' as const, inputIdent }
+        }
+
+        if (parts.length === 3) {
+          const [ident, latText, lonText] = parts
+          const lat = Number(latText)
+          const lon = Number(lonText)
+          if (ident && !Number.isNaN(lat) && !Number.isNaN(lon)) {
+            const inputIdent = ident.toUpperCase()
+            identInputs.push(inputIdent)
+            return {
+              index,
+              kind: 'manual' as const,
+              inputIdent
+            }
+          }
+        }
+
+        return { index, kind: 'invalid' as const, label: line }
+      })
+
+      const resolvedByInput = new Map<string, ResolvedWaypoint>()
+      if (identInputs.length) {
+        try {
+          const uniqueIdents = Array.from(new Set(identInputs))
+          const response = await fetchJson<WaypointResolveResponse>(
+            `/api/waypoints/resolve?idents=${encodeURIComponent(uniqueIdents.join(','))}`
+          )
+          response.waypoints.forEach((waypoint) => {
+            resolvedByInput.set(waypoint.inputIdent.toUpperCase(), waypoint)
+          })
+        } catch {
+          if (!cancelled) {
+            setWaypointChips([])
+          }
+          return
+        }
+      }
+
+      const nextChips: WaypointChip[] = lineDescriptors.map((descriptor) => {
+        if (descriptor.kind === 'manual') {
+          const resolved = resolvedByInput.get(descriptor.inputIdent)
+          if (resolved) {
+            return {
+              key: `resolved-manual-${descriptor.index}`,
+              label: resolved.ident,
+              detail: resolved.source === 'navaid' && resolved.navaidType
+                ? `${resolved.navaidType} · ${resolved.name} · Manual coords`
+                : `${resolved.name} · Manual coords`,
+              status: 'resolved'
+            }
+          }
+
+          return {
+            key: `manual-${descriptor.index}`,
+            label: descriptor.inputIdent,
+            detail: 'Manual waypoint',
+            status: 'manual'
+          }
+        }
+
+        if (descriptor.kind === 'invalid') {
+          return {
+            key: `invalid-${descriptor.index}`,
+            label: descriptor.label,
+            detail: 'Invalid format',
+            status: 'invalid'
+          }
+        }
+
+        const resolved = resolvedByInput.get(descriptor.inputIdent)
+        if (!resolved) {
+          return {
+            key: `unknown-${descriptor.index}`,
+            label: descriptor.inputIdent,
+            detail: 'Unrecognized ident',
+            status: 'unknown'
+          }
+        }
+
+        return {
+          key: `resolved-${descriptor.index}`,
+          label: resolved.ident,
+          detail: resolved.source === 'navaid' && resolved.navaidType ? `${resolved.navaidType} · ${resolved.name}` : resolved.name,
+          status: 'resolved'
+        }
+      })
+
+      if (!cancelled) {
+        setWaypointChips(nextChips)
+      }
+    }, 250)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [waypointsInput])
 
   async function renderPdfFirstPageToImage(pdfUrl: string) {
     try {
@@ -610,12 +1124,9 @@ function App() {
         fetchJson<FrequencyResponse>(`/api/frequencies/${arrIcao}`)
       ])
 
-      const [suggestionResponse, sectionalResponse] = await Promise.all([
-        fetchJson<{ suggestions: SuggestedWaypoint[] }>(
-          `/api/route/suggestions?depLat=${depAirportResponse.airport.lat}&depLon=${depAirportResponse.airport.lon}&arrLat=${arrAirportResponse.airport.lat}&arrLon=${arrAirportResponse.airport.lon}`
-        ),
-        fetchJson<{ sectionals: SectionalChart[] }>('/api/sectionals')
-      ])
+      const suggestionResponse = await fetchJson<{ suggestions: SuggestedWaypoint[] }>(
+        `/api/route/suggestions?depLat=${depAirportResponse.airport.lat}&depLon=${depAirportResponse.airport.lon}&arrLat=${arrAirportResponse.airport.lat}&arrLon=${arrAirportResponse.airport.lon}`
+      )
 
       setDepAirport(depAirportResponse)
       setArrAirport(arrAirportResponse)
@@ -624,37 +1135,17 @@ function App() {
       setDepFrequencies(depFrequencyResponse.frequencies)
       setArrFrequencies(arrFrequencyResponse.frequencies)
       setSuggestedWaypoints(suggestionResponse.suggestions)
-      setSectionals(sectionalResponse.sectionals)
-
-      const routeMidLat = (depAirportResponse.airport.lat + arrAirportResponse.airport.lat) / 2
-      const routeMidLon = (depAirportResponse.airport.lon + arrAirportResponse.airport.lon) / 2
-      const bestSectional = sectionalResponse.sectionals
-        .filter((sectional) => sectional.centerLat != null && sectional.centerLon != null)
-        .sort((a, b) => {
-          const aLat = a.centerLat ?? 0
-          const aLon = a.centerLon ?? 0
-          const bLat = b.centerLat ?? 0
-          const bLon = b.centerLon ?? 0
-          const aDist2 = (aLat - routeMidLat) ** 2 + (aLon - routeMidLon) ** 2
-          const bDist2 = (bLat - routeMidLat) ** 2 + (bLon - routeMidLon) ** 2
-          return aDist2 - bDist2
-        })[0]
-
-      const selected = bestSectional ?? sectionalResponse.sectionals[0]
-      if (selected) {
-        setSelectedSectionalUrl(selected.url)
-      }
 
       await loadPrintableDiagrams(depAirportResponse, arrAirportResponse)
 
       if (!waypointsInput.trim() && suggestionResponse.suggestions.length) {
         const value = suggestionResponse.suggestions
-          .map((waypoint) => `${waypoint.ident},${waypoint.lat.toFixed(6)},${waypoint.lon.toFixed(6)}`)
+          .map((waypoint) => waypoint.ident)
           .join('\n')
         setWaypointsInput(value)
       }
 
-      const userWaypoints = parseWaypointLines()
+      const userWaypoints = await parseWaypointLines()
       const waypointPoints: Point[] = userWaypoints.length
         ? userWaypoints
         : suggestionResponse.suggestions.map((waypoint) => ({
@@ -687,7 +1178,6 @@ function App() {
       ]
 
       setRoutePoints(points)
-      setWaypointsInput(toWaypointInputFromRoute(points))
       await Promise.all([
         recomputeRouteCalculations(points),
         loadRouteNavaids(points)
@@ -707,96 +1197,220 @@ function App() {
       setLegs([])
       setSuggestedWaypoints([])
       setWindsAloft(null)
-      setRoutePoints([])
       setPrintableDiagrams([])
       setDepFrequencies([])
       setArrFrequencies([])
       setRouteNavaids([])
+      setRoutePoints([])
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    if (activeStep === 'plan') {
-      return
-    }
-
-    if (mapRef.current) {
-      mapRef.current.remove()
-      mapRef.current = null
-    }
-
-    routeLayerRef.current = null
-    markerLayerRef.current = null
-    rasterLayerRef.current = null
-  }, [activeStep])
-
-  useEffect(() => {
-    if (activeStep !== 'plan') {
-      return
-    }
-
-    const selectedSource = selectedSectionalUrl
-    if (!selectedSource || routePoints.length < 2 || !mapContainerRef.current) {
+    if (!mapContainerRef.current) {
       return
     }
 
     let cancelled = false
 
-    async function renderChartOverlay() {
-      setMapLoading(true)
-      setMapError(null)
-
+    async function renderInteractivePlanMap() {
       const leaflet = await import('leaflet')
-
       if (cancelled || !mapContainerRef.current) {
         return
       }
 
+      setPlanMapError(null)
+
       if (!mapRef.current) {
         mapRef.current = leaflet.map(mapContainerRef.current, {
+          center: [39.5, -98.35],
+          zoom: selectedPlanLayer.minZoom,
+          minZoom: selectedPlanLayer.minZoom,
+          maxZoom: selectedPlanLayer.maxZoom,
           zoomControl: true,
           attributionControl: true
         })
+
+        recenterToUserLocation(false)
+
+        mapRef.current.on('click', async (event: { latlng: { lat: number; lng: number } }) => {
+          try {
+            const nearest = await fetchJson<NearestAirportResponse>(
+              `/api/airport/nearest?lat=${event.latlng.lat}&lon=${event.latlng.lng}`
+            )
+            setSelectedMapAirport(nearest)
+            setSelectedMapAirportDistanceNm(nearest.distanceNm)
+            setSelectedMapAirportError(null)
+
+            try {
+              const weather = await fetchJson<WeatherResponse>(`/api/weather/${nearest.airport.icao}`)
+              setSelectedMapAirportWeather(weather)
+            } catch {
+              setSelectedMapAirportWeather(null)
+            }
+          } catch {
+            setSelectedMapAirport(null)
+            setSelectedMapAirportDistanceNm(null)
+            setSelectedMapAirportWeather(null)
+            setSelectedMapAirportError('No nearby airport information available at this map position.')
+          }
+        })
       }
 
-      mapRef.current.invalidateSize()
+      const map = mapRef.current
+      map.invalidateSize()
 
-      const response = await fetch(`/api/sectionals/overlay-metadata?source=${encodeURIComponent(selectedSource)}`)
-      if (!response.ok) {
-        throw new Error('Failed to load sectional overlay metadata.')
+      let switchedToFallbackLayer = false
+
+      function applyFallbackTileLayer(message?: string) {
+        if (!mapRef.current) {
+          return
+        }
+
+        if (chartLayerRef.current) {
+          map.removeLayer(chartLayerRef.current)
+          chartLayerRef.current = null
+        }
+
+        const fallbackLayer = leaflet.tileLayer(
+          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          {
+            minZoom: selectedPlanLayer.minZoom,
+            maxZoom: selectedPlanLayer.maxZoom,
+            attribution: '© OpenStreetMap contributors'
+          }
+        )
+
+        fallbackLayer.addTo(map)
+        chartLayerRef.current = fallbackLayer
+
+        if (message) {
+          setPlanMapError(message)
+        }
       }
 
-      const overlay = await response.json() as SectionalOverlayMetadata
+      if (chartLayerRef.current) {
+        map.removeLayer(chartLayerRef.current)
+      }
 
-      if (cancelled || !mapRef.current) {
+      if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
+        applyFallbackTileLayer('FAA chart tiles unavailable. Showing fallback base map.')
         return
       }
 
-      if (rasterLayerRef.current) {
-        mapRef.current.removeLayer(rasterLayerRef.current)
+      const BlobTileLayer = (leaflet as any).GridLayer.extend({
+        createTile(coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) {
+          const tile = document.createElement('img')
+          tile.alt = ''
+          tile.setAttribute('role', 'presentation')
+
+          const tileUrl = selectedPlanLayer.tileUrl
+            .replace('{z}', String(coords.z))
+            .replace('{x}', String(coords.x))
+            .replace('{y}', String(coords.y))
+
+          fetch(tileUrl)
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(`Tile request failed (${response.status})`)
+              }
+
+              return response.blob()
+            })
+            .then((blob) => {
+              const objectUrl = URL.createObjectURL(blob)
+
+              tile.onload = () => {
+                URL.revokeObjectURL(objectUrl)
+                done(null, tile)
+              }
+
+              tile.onerror = () => {
+                URL.revokeObjectURL(objectUrl)
+                done(new Error('Tile image decode failed.'), tile)
+              }
+
+              tile.src = objectUrl
+            })
+            .catch((error) => {
+              done(error as Error, tile)
+            })
+
+          return tile
+        }
+      })
+
+      const tileLayer = new BlobTileLayer({
+        minZoom: selectedPlanLayer.minZoom,
+        maxZoom: selectedPlanLayer.maxZoom,
+        minNativeZoom: selectedPlanLayer.minNativeZoom,
+        maxNativeZoom: selectedPlanLayer.maxZoom,
+        attribution: selectedPlanLayer.attribution
+      })
+
+      tileLayer.on('tileerror', () => {
+        if (!switchedToFallbackLayer) {
+          switchedToFallbackLayer = true
+          applyFallbackTileLayer('FAA chart tiles unavailable. Showing fallback base map.')
+        }
+      })
+
+      tileLayer.addTo(map)
+      chartLayerRef.current = tileLayer
+
+      if (tfrLayerRef.current) {
+        map.removeLayer(tfrLayerRef.current)
+        tfrLayerRef.current = null
       }
 
-      rasterLayerRef.current = leaflet.imageOverlay(
-        overlay.imageUrl,
-        overlay.bounds,
-        {
-          interactive: false,
-        opacity: 0.92,
-          crossOrigin: false
+      if (showTfrOverlay) {
+        try {
+          const tfrData = await fetchJson<TfrFeatureCollection>('/api/tfrs')
+          if (!cancelled && mapRef.current) {
+            tfrLayerRef.current = leaflet.geoJSON(tfrData as any, {
+              style: {
+                color: '#d81b60',
+                weight: 2,
+                fillColor: '#d81b60',
+                fillOpacity: 0.12
+              },
+              onEachFeature: (feature: { properties?: Record<string, unknown> }, layer: { bindPopup: (content: string) => void }) => {
+                const popupHtml = buildTfrPopupHtml(feature.properties ?? {})
+                layer.bindPopup(popupHtml)
+              }
+            })
+            tfrLayerRef.current.addTo(map)
+          }
+        } catch {
+          setPlanMapError((current) => current ?? 'Unable to load TFR overlay.')
         }
-      )
+      }
 
-      rasterLayerRef.current.addTo(mapRef.current)
-      mapRef.current.fitBounds(overlay.bounds)
+      if (routePoints.length < 2) {
+        if (routeLayerRef.current) {
+          map.removeLayer(routeLayerRef.current)
+          routeLayerRef.current = null
+        }
+
+        if (markerLayerRef.current) {
+          map.removeLayer(markerLayerRef.current)
+          markerLayerRef.current = null
+        }
+
+        if (userLocation) {
+          map.setView([userLocation.lat, userLocation.lon], Math.max(selectedPlanLayer.minZoom, 8))
+        }
+
+        return
+      }
 
       if (routeLayerRef.current) {
-        mapRef.current.removeLayer(routeLayerRef.current)
+        map.removeLayer(routeLayerRef.current)
       }
 
       if (markerLayerRef.current) {
-        mapRef.current.removeLayer(markerLayerRef.current)
+        map.removeLayer(markerLayerRef.current)
       }
 
       routeLayerRef.current = leaflet.polyline(
@@ -807,8 +1421,8 @@ function App() {
           opacity: 0.95
         }
       )
-
-      routeLayerRef.current.addTo(mapRef.current)
+      routeLayerRef.current.addTo(map)
+      map.fitBounds(routeLayerRef.current.getBounds(), { padding: [20, 20] })
 
       const markers = routePoints.map((point, index) => {
         const isEndpoint = index === 0 || index === routePoints.length - 1
@@ -821,6 +1435,27 @@ function App() {
         })
 
         const marker = leaflet.marker([point.lat, point.lon], { icon, draggable: !isEndpoint })
+
+        marker.on('click', async () => {
+          try {
+            const airport = await fetchJson<AirportResponse>(`/api/airport/${point.ident}`)
+            setSelectedMapAirport(airport)
+            setSelectedMapAirportDistanceNm(null)
+            setSelectedMapAirportError(null)
+
+            try {
+              const wx = await fetchJson<WeatherResponse>(`/api/weather/${point.ident}`)
+              setSelectedMapAirportWeather(wx)
+            } catch {
+              setSelectedMapAirportWeather(null)
+            }
+          } catch {
+            setSelectedMapAirport(null)
+            setSelectedMapAirportDistanceNm(null)
+            setSelectedMapAirportWeather(null)
+            setSelectedMapAirportError(`No airport information available for ${point.ident}.`)
+          }
+        })
 
         if (!isEndpoint) {
           marker.on('drag', () => {
@@ -894,32 +1529,293 @@ function App() {
       })
 
       markerLayerRef.current = leaflet.layerGroup(markers)
-      markerLayerRef.current.addTo(mapRef.current)
-      setMapLoading(false)
+      markerLayerRef.current.addTo(map)
     }
 
-    renderChartOverlay().catch((caughtError) => {
-      const message = (caughtError as Error).message || 'Failed to render sectional map.'
-      setMapError(message)
-      setMapLoading(false)
+    renderInteractivePlanMap().catch((caughtError) => {
+      const message = (caughtError as Error).message || 'Failed to render route editing map.'
+      setPlanMapError(message)
     })
 
     return () => {
       cancelled = true
     }
-  }, [activeStep, selectedSectionalUrl, routePoints])
+  }, [routePoints, selectedPlanLayer, showTfrOverlay, userLocation])
+
+  useEffect(() => {
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove()
+      }
+
+      mapRef.current = null
+      chartLayerRef.current = null
+      tfrLayerRef.current = null
+      routeLayerRef.current = null
+      markerLayerRef.current = null
+    }
+  }, [])
 
   return (
     <main className="app">
-      <h1 className="screen-only">VFR Nav Log Builder</h1>
-      <p className="subtitle screen-only">Build a pilot nav log with live airport, weather, and FAA status data.</p>
+      <section className="screen-only map-shell">
+        <div className="map-workspace">
+          <div ref={mapContainerRef} className="sectional-map" />
 
-      <section className="card screen-only step-nav-card">
-        <div className="step-nav" role="tablist" aria-label="Planner steps">
-          <button type="button" className={activeStep === 'plan' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('plan')}>Plan</button>
-          <button type="button" className={activeStep === 'review' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('review')} disabled={!hasNavData}>Review</button>
-          <button type="button" className={activeStep === 'print' ? 'step-button active' : 'step-button'} onClick={() => setActiveStep('print')} disabled={!hasNavData}>Print</button>
+          <aside className="map-flight-panel">
+            <div className="map-flight-header">
+              <h2>Flight Plan</h2>
+              <div className="map-flight-header-actions">
+                <span className="map-flight-badge">LIVE</span>
+                <button
+                  type="button"
+                  className="map-locate-button"
+                  onClick={() => recenterToUserLocation(true)}
+                >
+                  Locate Me
+                </button>
+              </div>
+            </div>
+
+            <div className="map-flight-section">
+            <div className="map-flight-inline-grid">
+              <label>
+                🛫 Departure
+                <input value={departure} onChange={(event) => setDeparture(event.target.value.toUpperCase())} maxLength={4} />
+              </label>
+              <label>
+                🛬 Arrival
+                <input value={arrival} onChange={(event) => setArrival(event.target.value.toUpperCase())} maxLength={4} />
+              </label>
+            </div>
+            </div>
+
+            <div className="map-flight-section">
+            <div className="map-flight-inline-grid map-flight-inline-grid-4">
+              <label>
+                Alt
+                <select value={cruiseAltitudeFt} onChange={(event) => setCruiseAltitudeFt(Number(event.target.value))}>
+                  {cruiseAltitudeOptions.map((altitude) => (
+                    <option key={altitude} value={altitude}>{altitude}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                TAS
+                <input type="number" value={tas} onChange={(event) => setTas(Number(event.target.value))} />
+              </label>
+              <label>
+                Dev
+                <input type="number" value={compassDeviation} onChange={(event) => setCompassDeviation(Number(event.target.value))} />
+              </label>
+              <label>
+                GPH
+                <input type="number" value={fuelBurn} onChange={(event) => setFuelBurn(Number(event.target.value))} />
+              </label>
+            </div>
+            </div>
+
+            <div className="map-flight-section">
+            <label>
+              🗺 Map Layer
+              <select value={planLayerId} onChange={(event) => setPlanLayerId(event.target.value)}>
+                {faaCharts.map((layer) => (
+                  <option key={layer.id} value={layer.id}>{layer.name}</option>
+                ))}
+              </select>
+            </label>
+            </div>
+
+            <div className="map-flight-section">
+              <label className="map-overlay-check">
+                <input
+                  type="checkbox"
+                  checked={showTfrOverlay}
+                  onChange={(event) => setShowTfrOverlay(event.target.checked)}
+                />
+                🚫 TFR Overlay
+              </label>
+            </div>
+
+            <div className="map-flight-section">
+            <label className="waypoints">
+              📍 Waypoints
+              <div className="waypoint-entry-box">
+                {waypointChips.length > 0 && (
+                  <div className="waypoint-chip-list">
+                    {waypointChips.map((chip, index) => (
+                      <div
+                        key={chip.key}
+                        data-waypoint-chip-index={index}
+                        className={`waypoint-chip waypoint-chip-${chip.status} waypoint-chip-draggable${draggingWaypointIndex === index ? ' dragging' : ''}${draggingWaypointIndex != null && dragOverWaypointIndex === index && draggingWaypointIndex !== index ? ' drop-target' : ''}`}
+                        draggable
+                        onDragStart={() => {
+                          setDraggingWaypointIndex(index)
+                          setDragOverWaypointIndex(index)
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault()
+                          setDragOverWaypointIndex(index)
+                        }}
+                        onDragLeave={() => {
+                          setDragOverWaypointIndex((current) => (current === index ? null : current))
+                        }}
+                        onDrop={() => reorderWaypointChips(index)}
+                        onDragEnd={() => {
+                          setDraggingWaypointIndex(null)
+                          setDragOverWaypointIndex(null)
+                        }}
+                        onTouchStart={() => {
+                          setDraggingWaypointIndex(index)
+                          setDragOverWaypointIndex(index)
+                        }}
+                        onTouchMove={(event) => {
+                          const touch = event.touches[0]
+                          if (!touch) {
+                            return
+                          }
+
+                          event.preventDefault()
+                          updateTouchDragTarget(touch.clientX, touch.clientY)
+                        }}
+                        onTouchEnd={(event) => {
+                          event.preventDefault()
+                          reorderWaypointChips(dragOverWaypointIndex ?? index)
+                        }}
+                        onTouchCancel={() => {
+                          setDraggingWaypointIndex(null)
+                          setDragOverWaypointIndex(null)
+                        }}
+                        title="Drag to reorder"
+                      >
+                        <span className="waypoint-chip-handle" aria-hidden="true">⋮⋮</span>
+                        <span className="waypoint-chip-main">
+                          <strong>{chip.label}</strong>
+                          {' · '}
+                          {chip.detail}
+                        </span>
+                        <button
+                          type="button"
+                          className="waypoint-chip-remove"
+                          draggable={false}
+                          onMouseDown={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                          }}
+                          onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            removeWaypointChip(index)
+                          }}
+                          onTouchStart={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                          }}
+                          onTouchEnd={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            removeWaypointChip(index)
+                          }}
+                          aria-label={`Remove ${chip.label}`}
+                          title="Remove waypoint"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input
+                  value={waypointDraft}
+                  onChange={(event) => {
+                    const value = event.target.value
+
+                    if (value.includes('\n')) {
+                      const lines = value.split('\n').map((line) => line.trim())
+                      const complete = lines.slice(0, -1).filter(Boolean)
+                      if (complete.length) {
+                        setWaypointLines([...waypointLines, ...complete])
+                      }
+                      setWaypointDraft(lines.length ? lines[lines.length - 1] : '')
+                      return
+                    }
+
+                    if (value.endsWith(' ') && value.trim()) {
+                      setWaypointLines([...waypointLines, value.trim()])
+                      setWaypointDraft('')
+                      return
+                    }
+
+                    setWaypointDraft(value)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      appendWaypointDraft()
+                      return
+                    }
+
+                    if (event.key === 'Backspace' && !waypointDraft.trim()) {
+                      event.preventDefault()
+                      removeLastWaypointChip()
+                    }
+                  }}
+                  onBlur={appendWaypointDraft}
+                  placeholder={waypointLines.length ? 'Type next waypoint and press Enter' : 'RIPON or RIPON,43.8427,-88.8445'}
+                  className="waypoint-chip-input"
+                />
+              </div>
+            </label>
+            </div>
+
+            <div className="navaid-type-selector map-flight-section">
+              <p>📡 Included Route Navaid Types</p>
+              <div className="review-checklist">
+                {routeNavaidTypeOptions.map((type) => (
+                  <label key={type} className="review-checkitem">
+                    <input
+                      type="checkbox"
+                      checked={includedNavaidTypes.includes(type)}
+                      onChange={(event) => toggleIncludedNavaidType(type, event.target.checked)}
+                    />
+                    {type}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="map-flight-actions">
+              <button onClick={buildNavLog} disabled={loading}>
+                {loading ? 'Loading...' : '▶ Build Nav Log'}
+              </button>
+              {legs.length > 0 && (
+                <button className="print-button" onClick={() => window.print()} type="button">
+                  🖨 Print
+                </button>
+              )}
+            </div>
+
+            {error && <p className="error">{error}</p>}
+            {planMapError && <p className="error">{planMapError}</p>}
+          </aside>
         </div>
+
+        <p>
+          Drag blue waypoint markers to visually edit the route. Start/end markers stay fixed to departure/arrival airports.
+        </p>
+        {selectedMapAirport && (
+          <article className="map-airport-info">
+            <h3>{selectedMapAirport.airport.icao} — {selectedMapAirport.airport.name}</h3>
+            <p>
+              {selectedMapAirport.airport.lat.toFixed(4)}, {selectedMapAirport.airport.lon.toFixed(4)}
+              {selectedMapAirport.airport.state ? ` · ${selectedMapAirport.airport.state}` : ''}
+              {selectedMapAirportDistanceNm != null ? ` · ${selectedMapAirportDistanceNm.toFixed(1)} NM from click` : ''}
+            </p>
+            <p>FAA Delay: {selectedMapAirport.faa.hasDelay ? `${selectedMapAirport.faa.delays.length} active` : 'None reported'}</p>
+            <p>Weather: {formatDecodedWeather(selectedMapAirportWeather)}</p>
+          </article>
+        )}
+        {selectedMapAirportError && <p className="error">{selectedMapAirportError}</p>}
       </section>
 
       {hasNavData && depAirport && arrAirport && (
@@ -933,68 +1829,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'plan' && (
-        <section className="card screen-only">
-        <h2>Flight Setup</h2>
-        <div className="grid">
-          <label>
-            Departure (ICAO/IATA/FAA)
-            <input value={departure} onChange={(event) => setDeparture(event.target.value.toUpperCase())} maxLength={4} />
-          </label>
-          <label>
-            Arrival (ICAO/IATA/FAA)
-            <input value={arrival} onChange={(event) => setArrival(event.target.value.toUpperCase())} maxLength={4} />
-          </label>
-          <label>
-            Cruise Altitude (ft)
-            <select value={cruiseAltitudeFt} onChange={(event) => setCruiseAltitudeFt(Number(event.target.value))}>
-              {cruiseAltitudeOptions.map((altitude) => (
-                <option key={altitude} value={altitude}>{altitude}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Cruise TAS (kts)
-            <input type="number" value={tas} onChange={(event) => setTas(Number(event.target.value))} />
-          </label>
-          <label>
-            Compass Deviation (°E + / °W -)
-            <input type="number" value={compassDeviation} onChange={(event) => setCompassDeviation(Number(event.target.value))} />
-          </label>
-          <label>
-            Fuel Burn (gph)
-            <input type="number" value={fuelBurn} onChange={(event) => setFuelBurn(Number(event.target.value))} />
-          </label>
-        </div>
-
-        <label className="waypoints">
-          Optional Waypoints (one per line: IDENT,lat,lon)
-          <textarea
-            rows={4}
-            value={waypointsInput}
-            onChange={(event) => setWaypointsInput(event.target.value)}
-            placeholder="RIPON,43.8427,-88.8445"
-          />
-        </label>
-
-        <button onClick={buildNavLog} disabled={loading}>
-          {loading ? 'Loading data...' : 'Build Nav Log'}
-        </button>
-        {legs.length > 0 && (
-          <button className="print-button" onClick={() => window.print()} type="button">
-            Print Nav Log Packet
-          </button>
-        )}
-        {legs.length > 0 && (
-          <button className="print-button secondary" onClick={() => setActiveStep('print')} type="button">
-            Open Print View
-          </button>
-        )}
-        {error && <p className="error">{error}</p>}
-      </section>
-      )}
-
-      {activeStep === 'plan' && suggestedWaypoints.length > 0 && (
+      {suggestedWaypoints.length > 0 && (
         <section className="card screen-only">
           <h2>Suggested Enroute Waypoints</h2>
           <p className="subtitle">Real airport checkpoints near your route corridor.</p>
@@ -1011,7 +1846,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'review' && windsAloft && (
+      {windsAloft && (
         <section className="card screen-only">
           <h2>Winds Aloft (Live)</h2>
           <p>
@@ -1025,7 +1860,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'review' && hasNavData && (
+      {hasNavData && (
         <section className="card screen-only">
           <h2>Review Checklist</h2>
           <div className="review-checklist">
@@ -1065,7 +1900,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'review' && depAirport && arrAirport && (
+      {depAirport && arrAirport && (
         <section className="card screen-only">
           <h2>Airport + FAA Status</h2>
           {(depAirport.faa.hasDelay || arrAirport.faa.hasDelay) && (
@@ -1112,7 +1947,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'review' && (depWeather || arrWeather) && (
+      {(depWeather || arrWeather) && (
         <section className="card screen-only">
           <h2>Weather</h2>
           <div className="review-actions">
@@ -1139,7 +1974,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'review' && legs.length > 0 && (
+      {legs.length > 0 && (
         <section className="card screen-only">
           <h2>Nav Log Legs</h2>
           <div className="review-actions">
@@ -1226,39 +2061,7 @@ function App() {
         </section>
       )}
 
-      {activeStep === 'plan' && sectionals.length > 0 && (
-        <section className="card screen-only">
-          <h2>FAA Sectional Chart + Route Overlay</h2>
-          <label>
-            Select Sectional
-            <select
-              value={selectedSectionalUrl}
-              onChange={(event) => setSelectedSectionalUrl(event.target.value)}
-            >
-              {sectionals.map((sectional) => (
-                <option key={sectional.url} value={sectional.url}>
-                  {sectional.name} ({sectional.effectiveDate})
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedSectionalUrl && (
-            <>
-              {mapLoading && <p>Loading sectional map...</p>}
-              {mapError && <p className="error">{mapError}</p>}
-              <div ref={mapContainerRef} className="sectional-map" />
-              <p>
-                Route is drawn on a georeferenced FAA sectional chart layer generated from the official sectional files.
-                If needed, open the official FAA PDF directly:
-                {' '}
-                <a href={selectedSectionalUrl} target="_blank" rel="noreferrer">Open FAA sectional PDF</a>
-              </p>
-            </>
-          )}
-        </section>
-      )}
-
-      {activeStep === 'print' && legs.length > 0 && depAirport && arrAirport && (
+      {legs.length > 0 && depAirport && arrAirport && (
         <section className="card print-packet">
           <div className="screen-only print-actions">
             <button type="button" onClick={() => window.print()}>Print Packet</button>
@@ -1357,7 +2160,7 @@ function App() {
                       <td>{formatNavaidFrequency(navaid)}</td>
                       <td>{navaid.morse || '—'}</td>
                       <td>{navaid.name}</td>
-                      <td>{navaid.closestDistanceNm.toFixed(1)} NM</td>
+                      <td>{formatOffRoute(navaid)}</td>
                     </tr>
                   ))}
                 </tbody>
