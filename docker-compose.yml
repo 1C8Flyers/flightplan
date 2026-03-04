@@ -1,0 +1,25 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    restart: unless-stopped
+    expose:
+      - "4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+      args:
+        VITE_FAA_VFR_TILE_URL: ${VITE_FAA_VFR_TILE_URL}
+        VITE_FAA_TAC_TILE_URL: ${VITE_FAA_TAC_TILE_URL}
+        VITE_FAA_IFRLOW_TILE_URL: ${VITE_FAA_IFRLOW_TILE_URL}
+    depends_on:
+      - server
+    ports:
+      - "8080:80"
+    restart: unless-stopped

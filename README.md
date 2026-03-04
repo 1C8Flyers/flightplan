@@ -82,6 +82,61 @@ After updating env vars, restart the frontend dev server.
 npm run build
 ```
 
+## Deploy with Docker (NAS)
+
+This repo includes a production Docker deployment using:
+
+- `server` container (Node/Express API)
+- `web` container (Nginx serving the built React app and proxying `/api/*` to `server`)
+
+### 1) Configure environment
+
+```bash
+cp .env.docker.example .env
+```
+
+Edit `.env` and set:
+
+```bash
+VITE_FAA_VFR_TILE_URL=REPLACE_WITH_FAA_VFR_TILE_ENDPOINT
+VITE_FAA_TAC_TILE_URL=REPLACE_WITH_FAA_TAC_TILE_ENDPOINT
+VITE_FAA_IFRLOW_TILE_URL=REPLACE_WITH_FAA_IFRLOW_TILE_ENDPOINT
+```
+
+### 2) Build and run
+
+```bash
+docker compose up -d --build
+```
+
+Open `http://YOUR_NAS_IP:8080`.
+
+### 3) Recommended NAS reverse proxy
+
+Put your NAS reverse proxy in front of port `8080` for TLS (443) and a friendly hostname, for example:
+
+- `https://navlog.yourdomain.com` → `http://NAS_IP:8080`
+
+### 4) Update workflow
+
+```bash
+docker compose pull
+docker compose up -d --build
+```
+
+### 5) Logs / health checks
+
+```bash
+docker compose logs -f web
+docker compose logs -f server
+```
+
+Quick API check:
+
+```bash
+curl http://YOUR_NAS_IP:8080/api/data-cycle
+```
+
 ## Notes
 
 - Wind inputs are interpreted as **true wind direction FROM** and speed in knots.

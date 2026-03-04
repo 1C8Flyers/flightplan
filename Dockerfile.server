@@ -1,0 +1,31 @@
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY server/package.json ./server/package.json
+
+RUN npm ci --workspace server --include-workspace-root=false
+
+FROM node:20-alpine AS build
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY server/package.json ./server/package.json
+COPY server/tsconfig.json ./server/tsconfig.json
+COPY server/src ./server/src
+
+RUN npm ci --workspace server --include-workspace-root=false
+RUN npm run build --workspace server
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+COPY server/package.json ./server/package.json
+RUN npm ci --workspace server --include-workspace-root=false --omit=dev
+
+COPY --from=build /app/server/dist ./server/dist
+
+EXPOSE 4000
+CMD ["npm", "run", "start", "--workspace", "server"]
