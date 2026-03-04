@@ -77,13 +77,20 @@
 }
 
 .charts-copyright {
+  position: fixed;
+  left: 50%;
+  bottom: 0.45rem;
+  transform: translateX(-50%);
+  z-index: 1200;
   margin: 0;
-  padding: 0.5rem 1rem 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
   text-align: center;
   font-size: 0.82rem;
   color: #40516f;
-  background: #fff;
-  border-top: 1px solid #d2d9e7;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(188, 199, 221, 0.7);
+  pointer-events: none;
 }
 
 .charts-search-overlay {
