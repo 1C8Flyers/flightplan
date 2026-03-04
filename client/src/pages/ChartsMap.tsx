@@ -215,9 +215,11 @@ export default function ChartsMap() {
         zoom: appliedLayer.minZoom,
         minZoom: appliedLayer.minZoom,
         maxZoom: appliedLayer.maxZoom,
-        zoomControl: true,
+        zoomControl: false,
         attributionControl: true
       })
+
+      leaflet.control.zoom({ position: 'bottomleft' }).addTo(map)
 
       map.on('mousemove', (event: LeafletEvent & { latlng: { lat: number; lng: number } }) => {
         setMousePosition({ lat: event.latlng.lat, lon: event.latlng.lng })
@@ -543,6 +545,8 @@ export default function ChartsMap() {
 
         <div ref={mapHostRef} className="charts-map" />
       </section>
+
+      <footer className="charts-copyright">© 1C8 Flyers, LLC</footer>
     </main>
   )
 }

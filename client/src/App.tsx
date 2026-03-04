@@ -1538,9 +1538,11 @@ function App() {
           zoom: selectedPlanLayer.minZoom,
           minZoom: selectedPlanLayer.minZoom,
           maxZoom: selectedPlanLayer.maxZoom,
-          zoomControl: true,
+          zoomControl: false,
           attributionControl: true
         })
+
+        leaflet.control.zoom({ position: 'bottomleft' }).addTo(mapRef.current)
 
         recenterToUserLocation(false)
 
@@ -2891,6 +2893,8 @@ function App() {
           </div>
         </section>
       )}
+
+      <footer className="app-copyright screen-only">© 1C8 Flyers, LLC</footer>
     </main>
   )
 }

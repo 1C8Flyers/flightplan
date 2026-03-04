@@ -76,6 +76,16 @@
   inset: 0;
 }
 
+.charts-copyright {
+  margin: 0;
+  padding: 0.5rem 1rem 0.75rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: #40516f;
+  background: #fff;
+  border-top: 1px solid #d2d9e7;
+}
+
 .charts-search-overlay {
   position: absolute;
   top: 1rem;
