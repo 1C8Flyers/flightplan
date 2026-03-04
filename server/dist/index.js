@@ -427,7 +427,7 @@ async function fetchNavaidsDataset() {
             continue;
         }
         const ident = line.slice(4, 8).trim().toUpperCase();
-        const type = line.slice(8, 28).trim().toUpperCase();
+        const type = normalizeNavaidType(line.slice(8, 28));
         const name = line.slice(42, 72).trim();
         const lat = parseDmsCoordinate(line.slice(371, 385));
         const lon = parseDmsCoordinate(line.slice(396, 410));
@@ -1002,11 +1002,18 @@ function toMorsePattern(value) {
         .join(' ');
 }
 const routeNavaidTypeOptions = ['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'];
+function normalizeNavaidType(value) {
+    return value
+        .trim()
+        .toUpperCase()
+        .replace(/\s*\/\s*/g, '-')
+        .replace(/\s+/g, '-');
+}
 function selectRouteNavaids(routePoints, navaids, includedTypes = [...routeNavaidTypeOptions]) {
     if (routePoints.length < 2) {
         return [];
     }
-    const allowedTypes = new Set(includedTypes.length > 0 ? includedTypes : routeNavaidTypeOptions);
+    const allowedTypes = new Set((includedTypes.length > 0 ? includedTypes : routeNavaidTypeOptions).map((type) => normalizeNavaidType(type)));
     const byIdent = new Map();
     for (let legIndex = 0; legIndex < routePoints.length - 1; legIndex += 1) {
         const dep = routePoints[legIndex];
@@ -1541,7 +1548,7 @@ app.get('/api/navaids/route', async (req, res) => {
         const requestedTypes = rawTypes
             ? rawTypes
                 .split(',')
-                .map((value) => value.trim().toUpperCase())
+                .map((value) => normalizeNavaidType(value))
                 .filter(Boolean)
             : [...routeNavaidTypeOptions];
         const includedTypes = requestedTypes.filter((type, index) => routeNavaidTypeOptions.includes(type) && requestedTypes.indexOf(type) === index);
