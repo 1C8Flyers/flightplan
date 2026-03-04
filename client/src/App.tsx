@@ -374,8 +374,8 @@ function App() {
   const fallbackWindSpeed = 15
   const cruiseAltitudeOptions = [3000, 6000, 6500, 9000, 12000, 18000, 24000]
 
-  const [departure, setDeparture] = useState('KOSH')
-  const [arrival, setArrival] = useState('KMSN')
+  const [departure, setDeparture] = useState('')
+  const [arrival, setArrival] = useState('')
   const [waypointsInput, setWaypointsInput] = useState('')
   const [waypointDraft, setWaypointDraft] = useState('')
   const [waypointChips, setWaypointChips] = useState<WaypointChip[]>([])
@@ -1672,26 +1672,28 @@ function App() {
       }
 
       if (showTfrOverlay) {
-        try {
-          const tfrData = await fetchJson<TfrFeatureCollection>('/api/tfrs')
-          if (!cancelled && mapRef.current) {
-            tfrLayerRef.current = leaflet.geoJSON(tfrData as any, {
-              style: {
-                color: '#d81b60',
-                weight: 2,
-                fillColor: '#d81b60',
-                fillOpacity: 0.12
-              },
-              onEachFeature: (feature: { properties?: Record<string, unknown> }, layer: { bindPopup: (content: string) => void }) => {
-                const popupHtml = buildTfrPopupHtml(feature.properties ?? {})
-                layer.bindPopup(popupHtml)
-              }
-            })
-            tfrLayerRef.current.addTo(map)
+        void (async () => {
+          try {
+            const tfrData = await fetchJson<TfrFeatureCollection>('/api/tfrs')
+            if (!cancelled && mapRef.current) {
+              tfrLayerRef.current = leaflet.geoJSON(tfrData as any, {
+                style: {
+                  color: '#d81b60',
+                  weight: 2,
+                  fillColor: '#d81b60',
+                  fillOpacity: 0.12
+                },
+                onEachFeature: (feature: { properties?: Record<string, unknown> }, layer: { bindPopup: (content: string) => void }) => {
+                  const popupHtml = buildTfrPopupHtml(feature.properties ?? {})
+                  layer.bindPopup(popupHtml)
+                }
+              })
+              tfrLayerRef.current.addTo(map)
+            }
+          } catch {
+            setPlanMapError((current) => current ?? 'Unable to load TFR overlay.')
           }
-        } catch {
-          setPlanMapError((current) => current ?? 'Unable to load TFR overlay.')
-        }
+        })()
       }
 
       if (routePoints.length < 2) {
