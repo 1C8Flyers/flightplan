@@ -542,6 +542,7 @@ function normalizeSearchText(value: string) {
 function searchAirportsByQuery(query: string, airports: AirportRecord[]) {
   const normalizedQuery = normalizeSearchText(query)
   const uppercaseQuery = query.trim().toUpperCase()
+  const queryCodeCandidates = getAirportCodeCandidates(uppercaseQuery)
   const tokens = normalizedQuery.split(' ').filter(Boolean)
 
   if (!normalizedQuery || !uppercaseQuery) {
@@ -557,12 +558,17 @@ function searchAirportsByQuery(query: string, airports: AirportRecord[]) {
       const local = airport.localCode?.toUpperCase() ?? ''
       const name = normalizeSearchText(airport.name)
       const city = normalizeSearchText(airport.municipality ?? '')
+      const airportCodes = [ident, gps, iata, local].filter(Boolean)
 
       let score = 0
 
-      if ([ident, gps, iata, local].includes(uppercaseQuery)) {
+      if (queryCodeCandidates.some((candidate) => airportCodes.includes(candidate))) {
         score = 120
-      } else if ([ident, gps, iata, local].some((value) => Boolean(value) && value.startsWith(uppercaseQuery))) {
+      } else if (
+        queryCodeCandidates.some((candidate) =>
+          airportCodes.some((value) => value.startsWith(candidate))
+        )
+      ) {
         score = 95
       } else if (name.startsWith(normalizedQuery)) {
         score = 80
