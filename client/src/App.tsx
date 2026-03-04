@@ -32,6 +32,16 @@ type NearestAirportResponse = AirportResponse & {
   distanceNm: number
 }
 
+type AirportSearchResult = {
+  ident: string
+  name: string
+  city: string | null
+  state: string | null
+  lat: number
+  lon: number
+  type: string
+}
+
 type WeatherResponse = {
   metar: {
     rawOb?: string
@@ -93,6 +103,40 @@ type AirportDiagramResponse = {
   } | null
 }
 
+type RunwayResponse = {
+  runways: Array<{
+    id: string
+    lengthFt: number | null
+    widthFt: number | null
+    surface: string | null
+    lighted: boolean
+    closed: boolean
+    leIdent: string | null
+    heIdent: string | null
+    leHeadingDeg: number | null
+    heHeadingDeg: number | null
+  }>
+}
+
+type DataCycleResponse = {
+  source: string
+  effectiveDate: string
+  downloadUrl: string
+}
+
+type AirportNotamsResponse = {
+  notams: Array<{
+    id: string
+    title: string
+    type: string
+    source: string
+    effective: string | null
+    expires: string | null
+    lastUpdated: string | null
+    distanceNm: number | null
+  }>
+}
+
 type PrintableDiagram = {
   role: 'Departure' | 'Arrival'
   airportIcao: string
@@ -112,6 +156,8 @@ type RouteNavaid = {
   offRouteDirection?: 'left' | 'right' | 'center'
   legIndex: number
 }
+
+type MapAirportTab = 'weather' | 'general' | 'winds' | 'frequencies' | 'runways' | 'charts' | 'notams'
 
 type LandmarkNameResponse = {
   ident: string | null
@@ -181,6 +227,15 @@ type TfrFeatureCollection = {
 }
 
 const routeNavaidTypeOptions = ['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'] as const
+const mapAirportTabs: Array<{ id: MapAirportTab; label: string }> = [
+  { id: 'weather', label: 'Weather' },
+  { id: 'general', label: 'General' },
+  { id: 'winds', label: 'Winds' },
+  { id: 'frequencies', label: 'Freqs' },
+  { id: 'runways', label: 'Runways' },
+  { id: 'charts', label: 'Charts' },
+  { id: 'notams', label: 'NOTAMs' }
+]
 
 function toRad(degrees: number) {
   return (degrees * Math.PI) / 180
@@ -356,10 +411,28 @@ function App() {
   const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
   const [routeNavaids, setRouteNavaids] = useState<RouteNavaid[]>([])
   const [routePoints, setRoutePoints] = useState<Point[]>([])
+  const [mapAirportSearchQuery, setMapAirportSearchQuery] = useState('')
+  const [mapAirportSearchFocused, setMapAirportSearchFocused] = useState(false)
+  const [mapAirportSearchLoading, setMapAirportSearchLoading] = useState(false)
+  const [mapAirportSearchError, setMapAirportSearchError] = useState<string | null>(null)
+  const [mapAirportSearchResults, setMapAirportSearchResults] = useState<AirportSearchResult[]>([])
   const [selectedMapAirport, setSelectedMapAirport] = useState<AirportResponse | null>(null)
   const [selectedMapAirportDistanceNm, setSelectedMapAirportDistanceNm] = useState<number | null>(null)
   const [selectedMapAirportWeather, setSelectedMapAirportWeather] = useState<WeatherResponse | null>(null)
   const [selectedMapAirportError, setSelectedMapAirportError] = useState<string | null>(null)
+  const [selectedMapAirportTab, setSelectedMapAirportTab] = useState<MapAirportTab>('weather')
+  const [selectedMapAirportFrequencies, setSelectedMapAirportFrequencies] = useState<FrequencyResponse['frequencies']>([])
+  const [selectedMapAirportFrequenciesLoading, setSelectedMapAirportFrequenciesLoading] = useState(false)
+  const [selectedMapAirportFrequenciesError, setSelectedMapAirportFrequenciesError] = useState<string | null>(null)
+  const [selectedMapAirportDiagram, setSelectedMapAirportDiagram] = useState<AirportDiagramResponse['diagram']>(null)
+  const [selectedMapAirportDiagramLoading, setSelectedMapAirportDiagramLoading] = useState(false)
+  const [selectedMapAirportDiagramError, setSelectedMapAirportDiagramError] = useState<string | null>(null)
+  const [selectedMapAirportRunways, setSelectedMapAirportRunways] = useState<RunwayResponse['runways']>([])
+  const [selectedMapAirportRunwaysLoading, setSelectedMapAirportRunwaysLoading] = useState(false)
+  const [selectedMapAirportRunwaysError, setSelectedMapAirportRunwaysError] = useState<string | null>(null)
+  const [selectedMapAirportNotams, setSelectedMapAirportNotams] = useState<AirportNotamsResponse['notams']>([])
+  const [selectedMapAirportNotamsLoading, setSelectedMapAirportNotamsLoading] = useState(false)
+  const [selectedMapAirportNotamsError, setSelectedMapAirportNotamsError] = useState<string | null>(null)
   const [showTfrOverlay, setShowTfrOverlay] = useState(true)
   const [planLayerId, setPlanLayerId] = useState(() => {
     if (typeof window === 'undefined') {
@@ -375,9 +448,11 @@ function App() {
   })
   const [planMapError, setPlanMapError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
+  const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
 
   const recalcRequestIdRef = useRef(0)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const mapSearchContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const chartLayerRef = useRef<any>(null)
   const tfrLayerRef = useRef<any>(null)
@@ -400,12 +475,38 @@ function App() {
     () => faaCharts.find((layer) => layer.id === planLayerId) ?? faaCharts[0],
     [planLayerId]
   )
+  const trimmedMapAirportSearchQuery = mapAirportSearchQuery.trim()
+  const showMapAirportSearchPanel = mapAirportSearchFocused && trimmedMapAirportSearchQuery.length > 0
+  const selectedMapAirportIcao = selectedMapAirport?.airport.icao ?? null
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('navlog:charts:selected-layer', planLayerId)
     }
   }, [planLayerId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadDataCycle() {
+      try {
+        const response = await fetchJson<DataCycleResponse>('/api/data-cycle')
+        if (!cancelled) {
+          setDataCycle(response)
+        }
+      } catch {
+        if (!cancelled) {
+          setDataCycle(null)
+        }
+      }
+    }
+
+    void loadDataCycle()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     const depCode = departure.trim().toUpperCase()
@@ -468,6 +569,172 @@ function App() {
     }
   }, [departure, arrival, waypointsInput])
 
+  useEffect(() => {
+    const query = trimmedMapAirportSearchQuery
+    if (query.length < 2) {
+      setMapAirportSearchResults([])
+      setMapAirportSearchError(null)
+      setMapAirportSearchLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setMapAirportSearchLoading(true)
+        setMapAirportSearchError(null)
+        const response = await fetchJson<{ airports: AirportSearchResult[] }>(
+          `/api/airports/search?q=${encodeURIComponent(query)}`
+        )
+
+        if (!cancelled) {
+          setMapAirportSearchResults(response.airports)
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setMapAirportSearchResults([])
+          setMapAirportSearchError((caughtError as Error).message)
+        }
+      } finally {
+        if (!cancelled) {
+          setMapAirportSearchLoading(false)
+        }
+      }
+    }, 220)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [trimmedMapAirportSearchQuery])
+
+  useEffect(() => {
+    function handleDocumentPointerDown(event: MouseEvent) {
+      if (!mapSearchContainerRef.current) {
+        return
+      }
+
+      if (event.target instanceof Node && mapSearchContainerRef.current.contains(event.target)) {
+        return
+      }
+
+      setMapAirportSearchFocused(false)
+    }
+
+    document.addEventListener('mousedown', handleDocumentPointerDown)
+
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentPointerDown)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedMapAirportIcao) {
+      setSelectedMapAirportFrequencies([])
+      setSelectedMapAirportFrequenciesLoading(false)
+      setSelectedMapAirportFrequenciesError(null)
+      setSelectedMapAirportDiagram(null)
+      setSelectedMapAirportDiagramLoading(false)
+      setSelectedMapAirportDiagramError(null)
+      setSelectedMapAirportRunways([])
+      setSelectedMapAirportRunwaysLoading(false)
+      setSelectedMapAirportRunwaysError(null)
+      setSelectedMapAirportNotams([])
+      setSelectedMapAirportNotamsLoading(false)
+      setSelectedMapAirportNotamsError(null)
+      return
+    }
+
+    setSelectedMapAirportTab('weather')
+    let cancelled = false
+
+    async function loadFrequencies() {
+      try {
+        setSelectedMapAirportFrequenciesLoading(true)
+        setSelectedMapAirportFrequenciesError(null)
+        const response = await fetchJson<FrequencyResponse>(`/api/frequencies/${selectedMapAirportIcao}`)
+        if (!cancelled) {
+          setSelectedMapAirportFrequencies(response.frequencies)
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setSelectedMapAirportFrequencies([])
+          setSelectedMapAirportFrequenciesError((caughtError as Error).message)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMapAirportFrequenciesLoading(false)
+        }
+      }
+    }
+
+    async function loadDiagram() {
+      try {
+        setSelectedMapAirportDiagramLoading(true)
+        setSelectedMapAirportDiagramError(null)
+        const response = await fetchJson<AirportDiagramResponse>(`/api/airport-diagram/by-airport/${selectedMapAirportIcao}`)
+        if (!cancelled) {
+          setSelectedMapAirportDiagram(response.diagram)
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setSelectedMapAirportDiagram(null)
+          setSelectedMapAirportDiagramError((caughtError as Error).message)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMapAirportDiagramLoading(false)
+        }
+      }
+    }
+
+    async function loadRunways() {
+      try {
+        setSelectedMapAirportRunwaysLoading(true)
+        setSelectedMapAirportRunwaysError(null)
+        const response = await fetchJson<RunwayResponse>(`/api/runways/${selectedMapAirportIcao}`)
+        if (!cancelled) {
+          setSelectedMapAirportRunways(response.runways)
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setSelectedMapAirportRunways([])
+          setSelectedMapAirportRunwaysError((caughtError as Error).message)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMapAirportRunwaysLoading(false)
+        }
+      }
+    }
+
+    async function loadNotams() {
+      try {
+        setSelectedMapAirportNotamsLoading(true)
+        setSelectedMapAirportNotamsError(null)
+        const response = await fetchJson<AirportNotamsResponse>(`/api/notams/${selectedMapAirportIcao}`)
+        if (!cancelled) {
+          setSelectedMapAirportNotams(response.notams)
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setSelectedMapAirportNotams([])
+          setSelectedMapAirportNotamsError((caughtError as Error).message)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedMapAirportNotamsLoading(false)
+        }
+      }
+    }
+
+    void Promise.all([loadFrequencies(), loadDiagram(), loadRunways(), loadNotams()])
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedMapAirportIcao])
+
   async function fetchJson<T>(path: string): Promise<T> {
     const response = await fetch(path)
     if (!response.ok) {
@@ -475,6 +742,46 @@ function App() {
       throw new Error(body.error ?? `Request failed: ${path}`)
     }
     return response.json() as Promise<T>
+  }
+
+  async function selectMapAirportFromIdent(ident: string) {
+    try {
+      const airport = await fetchJson<AirportResponse>(`/api/airport/${ident}`)
+      setSelectedMapAirport(airport)
+      setSelectedMapAirportDistanceNm(null)
+      setSelectedMapAirportError(null)
+
+      try {
+        const wx = await fetchJson<WeatherResponse>(`/api/weather/${airport.airport.icao}`)
+        setSelectedMapAirportWeather(wx)
+      } catch {
+        setSelectedMapAirportWeather(null)
+      }
+    } catch {
+      setSelectedMapAirport(null)
+      setSelectedMapAirportDistanceNm(null)
+      setSelectedMapAirportWeather(null)
+      setSelectedMapAirportError(`No airport information available for ${ident}.`)
+    }
+  }
+
+  async function selectMapAirportFromSearch(airport: AirportSearchResult) {
+    setMapAirportSearchQuery(airport.ident)
+    setMapAirportSearchFocused(false)
+
+    if (mapRef.current) {
+      mapRef.current.setView([airport.lat, airport.lon], Math.max(mapRef.current.getZoom(), 9))
+    }
+
+    await selectMapAirportFromIdent(airport.ident)
+  }
+
+  function clearSelectedMapAirport() {
+    setSelectedMapAirport(null)
+    setSelectedMapAirportDistanceNm(null)
+    setSelectedMapAirportWeather(null)
+    setSelectedMapAirportError(null)
+    setSelectedMapAirportTab('weather')
   }
 
   function recenterToUserLocation(showErrorOnFailure = true) {
@@ -1437,24 +1744,7 @@ function App() {
         const marker = leaflet.marker([point.lat, point.lon], { icon, draggable: !isEndpoint })
 
         marker.on('click', async () => {
-          try {
-            const airport = await fetchJson<AirportResponse>(`/api/airport/${point.ident}`)
-            setSelectedMapAirport(airport)
-            setSelectedMapAirportDistanceNm(null)
-            setSelectedMapAirportError(null)
-
-            try {
-              const wx = await fetchJson<WeatherResponse>(`/api/weather/${point.ident}`)
-              setSelectedMapAirportWeather(wx)
-            } catch {
-              setSelectedMapAirportWeather(null)
-            }
-          } catch {
-            setSelectedMapAirport(null)
-            setSelectedMapAirportDistanceNm(null)
-            setSelectedMapAirportWeather(null)
-            setSelectedMapAirportError(`No airport information available for ${point.ident}.`)
-          }
+          await selectMapAirportFromIdent(point.ident)
         })
 
         if (!isEndpoint) {
@@ -1562,11 +1852,261 @@ function App() {
         <div className="map-workspace">
           <div ref={mapContainerRef} className="sectional-map" />
 
+          <div className="map-search-overlay" ref={mapSearchContainerRef}>
+            <label className="map-search-box">
+              <span className="map-search-icon" aria-hidden="true">⌕</span>
+              <input
+                type="text"
+                value={mapAirportSearchQuery}
+                onChange={(event) => setMapAirportSearchQuery(event.target.value)}
+                onFocus={() => setMapAirportSearchFocused(true)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && mapAirportSearchResults[0]) {
+                    event.preventDefault()
+                    void selectMapAirportFromSearch(mapAirportSearchResults[0])
+                  }
+                }}
+                placeholder="Search"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+
+            {showMapAirportSearchPanel && (
+              <div className="map-airport-search-panel" role="listbox" aria-label="Airport search results">
+                {trimmedMapAirportSearchQuery.length === 1 && (
+                  <p className="map-airport-search-status">Type at least 2 characters to search.</p>
+                )}
+                {mapAirportSearchLoading && (
+                  <p className="map-airport-search-status">Searching airports…</p>
+                )}
+                {mapAirportSearchError && (
+                  <p className="map-airport-search-status map-airport-search-status-error">{mapAirportSearchError}</p>
+                )}
+
+                {trimmedMapAirportSearchQuery.length >= 2 && !mapAirportSearchLoading && !mapAirportSearchError && (
+                  mapAirportSearchResults.length === 0 ? (
+                    <p className="map-airport-search-status">No airport matches found.</p>
+                  ) : (
+                    <ul className="map-airport-search-results">
+                      {mapAirportSearchResults.map((airport) => (
+                        <li key={`${airport.ident}-${airport.lat}-${airport.lon}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void selectMapAirportFromSearch(airport)
+                            }}
+                          >
+                            <span className="map-airport-search-ident">{airport.ident}</span>
+                            <span className="map-airport-search-name">{airport.name}</span>
+                            <span className="map-airport-search-meta">
+                              {[airport.city, airport.state, 'USA'].filter(Boolean).join(', ')}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+
+          {(selectedMapAirport || selectedMapAirportError) && (
+            <div className="map-airport-info-overlay">
+              {selectedMapAirport && (
+                <article className="map-airport-info">
+                  <header className="map-airport-info-header">
+                    <div>
+                      <p className="map-airport-info-eyebrow">Airport Info</p>
+                      <h3>{selectedMapAirport.airport.icao} — {selectedMapAirport.airport.name}</h3>
+                    </div>
+                    <button type="button" className="map-airport-info-close" onClick={clearSelectedMapAirport} aria-label="Close airport info">×</button>
+                  </header>
+
+                  <nav className="map-airport-tabs" aria-label="Airport detail tabs">
+                    {mapAirportTabs.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        className={`map-airport-tab${selectedMapAirportTab === tab.id ? ' active' : ''}`}
+                        onClick={() => setSelectedMapAirportTab(tab.id)}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </nav>
+
+                  <div className="map-airport-tab-content">
+                    {selectedMapAirportTab === 'weather' && (
+                      <>
+                        <p>{formatDecodedWeather(selectedMapAirportWeather)}</p>
+                        {selectedMapAirportWeather?.sourceStation && (
+                          <p>
+                            Source: {selectedMapAirportWeather.sourceStation}
+                            {selectedMapAirportWeather.fallbackUsed ? ' (nearest reporting station)' : ''}
+                          </p>
+                        )}
+                        {selectedMapAirportWeather?.metar?.rawOb && <p>METAR: {selectedMapAirportWeather.metar.rawOb}</p>}
+                        {selectedMapAirportWeather?.taf?.rawTAF && <p>TAF: {selectedMapAirportWeather.taf.rawTAF}</p>}
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'general' && (
+                      <>
+                        <p>
+                          Position: {selectedMapAirport.airport.lat.toFixed(4)}, {selectedMapAirport.airport.lon.toFixed(4)}
+                        </p>
+                        <p>
+                          State/Country: {[selectedMapAirport.airport.state, selectedMapAirport.airport.country].filter(Boolean).join(', ') || '—'}
+                        </p>
+                        <p>
+                          Elevation: {selectedMapAirport.airport.elevationMeters == null
+                            ? '—'
+                            : `${(selectedMapAirport.airport.elevationMeters * 3.28084).toFixed(0)} ft`}
+                        </p>
+                        <p>
+                          ICAO/IATA/FAA: {selectedMapAirport.airport.icao} / {selectedMapAirport.airport.iata ?? '—'} / {selectedMapAirport.airport.faa ?? '—'}
+                        </p>
+                        {selectedMapAirportDistanceNm != null && <p>Distance from click: {selectedMapAirportDistanceNm.toFixed(1)} NM</p>}
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'winds' && (
+                      <>
+                        <p>
+                          Surface wind: {selectedMapAirportWeather?.metar?.wdir == null ? 'VRB' : `${selectedMapAirportWeather.metar.wdir}°`} @ {selectedMapAirportWeather?.metar?.wspd == null ? '—' : `${selectedMapAirportWeather.metar.wspd} kt`}
+                        </p>
+                        <p>Visibility: {selectedMapAirportWeather?.metar?.visib ? `${selectedMapAirportWeather.metar.visib} SM` : '—'}</p>
+                        <p>
+                          Altimeter: {selectedMapAirportWeather?.metar?.altim == null
+                            ? '—'
+                            : selectedMapAirportWeather.metar.altim > 200
+                              ? `${(selectedMapAirportWeather.metar.altim * 0.0295299830714).toFixed(2)} inHg`
+                              : `${selectedMapAirportWeather.metar.altim.toFixed(2)} inHg`}
+                        </p>
+                        <p>
+                          Temp / Dew: {selectedMapAirportWeather?.metar?.temp == null ? '—' : `${selectedMapAirportWeather.metar.temp}°C`} / {selectedMapAirportWeather?.metar?.dewp == null ? '—' : `${selectedMapAirportWeather.metar.dewp}°C`}
+                        </p>
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'frequencies' && (
+                      <>
+                        {selectedMapAirportFrequenciesLoading && <p>Loading frequencies…</p>}
+                        {!selectedMapAirportFrequenciesLoading && selectedMapAirportFrequenciesError && <p className="map-airport-info-error">{selectedMapAirportFrequenciesError}</p>}
+                        {!selectedMapAirportFrequenciesLoading && !selectedMapAirportFrequenciesError && selectedMapAirportFrequencies.length === 0 && (
+                          <p>No published frequencies found.</p>
+                        )}
+                        {!selectedMapAirportFrequenciesLoading && !selectedMapAirportFrequenciesError && selectedMapAirportFrequencies.length > 0 && (
+                          <ul className="map-airport-info-list">
+                            {selectedMapAirportFrequencies.slice(0, 12).map((frequency) => (
+                              <li key={`${frequency.type}-${frequency.description}-${frequency.frequencyMHz}`}>
+                                <strong>{formatFrequencyType(frequency.type)}</strong>
+                                <span>{frequency.frequencyMHz}</span>
+                                <span>{frequency.description || frequency.type}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'charts' && (
+                      <>
+                        {selectedMapAirportDiagramLoading && <p>Loading airport diagram…</p>}
+                        {!selectedMapAirportDiagramLoading && selectedMapAirportDiagramError && <p className="map-airport-info-error">{selectedMapAirportDiagramError}</p>}
+                        {!selectedMapAirportDiagramLoading && !selectedMapAirportDiagramError && !selectedMapAirportDiagram && (
+                          <p>No airport diagram available.</p>
+                        )}
+                        {!selectedMapAirportDiagramLoading && !selectedMapAirportDiagramError && selectedMapAirportDiagram && (
+                          <p>
+                            <a
+                              href={selectedMapAirportDiagram.proxiedPdfUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="map-airport-info-link"
+                            >
+                              Open {selectedMapAirportDiagram.chartName}
+                            </a>
+                          </p>
+                        )}
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'runways' && (
+                      <>
+                        {selectedMapAirportRunwaysLoading && <p>Loading runway data…</p>}
+                        {!selectedMapAirportRunwaysLoading && selectedMapAirportRunwaysError && <p className="map-airport-info-error">{selectedMapAirportRunwaysError}</p>}
+                        {!selectedMapAirportRunwaysLoading && !selectedMapAirportRunwaysError && selectedMapAirportRunways.length === 0 && (
+                          <p>No runway data available.</p>
+                        )}
+                        {!selectedMapAirportRunwaysLoading && !selectedMapAirportRunwaysError && selectedMapAirportRunways.length > 0 && (
+                          <ul className="map-airport-info-list">
+                            {selectedMapAirportRunways.slice(0, 10).map((runway) => (
+                              <li key={runway.id}>
+                                <strong>{runway.leIdent ?? '—'} / {runway.heIdent ?? '—'}</strong>
+                                <span>
+                                  {runway.lengthFt ? `${runway.lengthFt} x ` : '— x '}
+                                  {runway.widthFt ? `${runway.widthFt} ft` : '—'}
+                                </span>
+                                <span>
+                                  {runway.surface ?? 'Unknown surface'}
+                                  {runway.lighted ? ' · Lighted' : ''}
+                                  {runway.closed ? ' · Closed' : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
+
+                    {selectedMapAirportTab === 'notams' && (
+                      <>
+                        {selectedMapAirportNotamsLoading && <p>Loading NOTAMs…</p>}
+                        {!selectedMapAirportNotamsLoading && selectedMapAirportNotamsError && <p className="map-airport-info-error">{selectedMapAirportNotamsError}</p>}
+                        {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportNotams.length === 0 && (
+                          <p>No nearby NOTAM/TFR advisories found.</p>
+                        )}
+                        {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportNotams.length > 0 && (
+                          <ul className="map-airport-info-list">
+                            {selectedMapAirportNotams.map((notam) => (
+                              <li key={notam.id}>
+                                <strong>{notam.type} · {notam.id}</strong>
+                                <span>{notam.title}</span>
+                                <span>
+                                  {notam.distanceNm == null ? 'Distance n/a' : `${notam.distanceNm.toFixed(1)} NM`}
+                                  {notam.lastUpdated ? ` · Updated ${new Date(notam.lastUpdated).toLocaleString()}` : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="map-airport-info-note">Source: FAA TFR feed near selected airport.</p>
+                      </>
+                    )}
+                  </div>
+                </article>
+              )}
+              {selectedMapAirportError && (
+                <article className="map-airport-info map-airport-info-error-card">
+                  <header className="map-airport-info-header">
+                    <p className="map-airport-info-eyebrow">Airport Info</p>
+                    <button type="button" className="map-airport-info-close" onClick={clearSelectedMapAirport} aria-label="Close airport info">×</button>
+                  </header>
+                  <p className="map-airport-info-error">{selectedMapAirportError}</p>
+                </article>
+              )}
+            </div>
+          )}
+
           <aside className="map-flight-panel">
             <div className="map-flight-header">
               <h2>Flight Plan</h2>
               <div className="map-flight-header-actions">
                 <span className="map-flight-badge">LIVE</span>
+                {dataCycle && <span className="map-flight-badge map-flight-badge-secondary">NASR {dataCycle.effectiveDate}</span>}
                 <button
                   type="button"
                   className="map-locate-button"
@@ -1803,19 +2343,6 @@ function App() {
         <p>
           Drag blue waypoint markers to visually edit the route. Start/end markers stay fixed to departure/arrival airports.
         </p>
-        {selectedMapAirport && (
-          <article className="map-airport-info">
-            <h3>{selectedMapAirport.airport.icao} — {selectedMapAirport.airport.name}</h3>
-            <p>
-              {selectedMapAirport.airport.lat.toFixed(4)}, {selectedMapAirport.airport.lon.toFixed(4)}
-              {selectedMapAirport.airport.state ? ` · ${selectedMapAirport.airport.state}` : ''}
-              {selectedMapAirportDistanceNm != null ? ` · ${selectedMapAirportDistanceNm.toFixed(1)} NM from click` : ''}
-            </p>
-            <p>FAA Delay: {selectedMapAirport.faa.hasDelay ? `${selectedMapAirport.faa.delays.length} active` : 'None reported'}</p>
-            <p>Weather: {formatDecodedWeather(selectedMapAirportWeather)}</p>
-          </article>
-        )}
-        {selectedMapAirportError && <p className="error">{selectedMapAirportError}</p>}
       </section>
 
       {hasNavData && depAirport && arrAirport && (

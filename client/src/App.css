@@ -390,6 +390,180 @@ th {
   height: 100%;
 }
 
+.map-search-overlay {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: min(360px, calc(100% - 1.5rem));
+  z-index: 620;
+}
+
+.map-search-box {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid #4a5675;
+  border-radius: 10px;
+  background: rgba(17, 22, 33, 0.95);
+  color: #f7f9ff;
+  padding: 0.35rem 0.55rem;
+  backdrop-filter: blur(2px);
+}
+
+.map-search-icon {
+  color: rgba(234, 239, 255, 0.9);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.map-search-box input {
+  width: 100%;
+  background: transparent;
+  color: #fff;
+  border: none;
+  padding: 0.2rem 0;
+  font-size: 0.95rem;
+}
+
+.map-search-box input::placeholder {
+  color: rgba(234, 239, 255, 0.78);
+}
+
+.map-search-box input:focus {
+  outline: none;
+}
+
+.map-airport-info-overlay {
+  position: absolute;
+  top: 4.1rem;
+  right: 0.75rem;
+  width: min(360px, calc(100% - 1.5rem));
+  z-index: 610;
+}
+
+.map-airport-info-overlay .map-airport-info {
+  margin: 0;
+  border: 1px solid #4a5675;
+  border-radius: 10px;
+  background: rgba(17, 22, 33, 0.95);
+  color: #f7f9ff;
+  padding: 0.55rem;
+  backdrop-filter: blur(2px);
+}
+
+.map-airport-info-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.map-airport-info-eyebrow {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(207, 219, 241, 0.9);
+}
+
+.map-airport-info-close {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #f7f9ff;
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0.05rem 0.25rem;
+  cursor: pointer;
+}
+
+.map-airport-info-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.map-airport-info-overlay .map-airport-info h3 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.map-airport-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-bottom: 0.45rem;
+}
+
+.map-airport-tab {
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eefb;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.18rem 0.5rem;
+}
+
+.map-airport-tab.active {
+  background: rgba(117, 168, 255, 0.35);
+  border-color: rgba(148, 186, 255, 0.9);
+}
+
+.map-airport-tab-content {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(8, 12, 20, 0.72);
+  padding: 0.45rem 0.55rem;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.map-airport-tab-content p {
+  margin: 0.2rem 0;
+  font-size: 0.84rem;
+}
+
+.map-airport-info-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.map-airport-info-list li {
+  margin: 0;
+  padding: 0.35rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 0.12rem;
+}
+
+.map-airport-info-link {
+  color: #9fc5ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.map-airport-info-note {
+  color: rgba(207, 219, 241, 0.9);
+}
+
+.map-airport-info-error {
+  margin: 0;
+  color: #ffb8b8;
+  font-size: 0.84rem;
+}
+
+.map-airport-info-error-card {
+  border-color: rgba(255, 184, 184, 0.45);
+  background: rgba(53, 20, 20, 0.92);
+}
+
 .map-flight-panel {
   position: absolute;
   top: 0.75rem;
@@ -432,6 +606,11 @@ th {
   border: 1px solid rgba(158, 227, 177, 0.4);
   border-radius: 999px;
   padding: 0.1rem 0.42rem;
+}
+
+.map-flight-badge-secondary {
+  color: #d5e8ff;
+  border-color: rgba(148, 186, 255, 0.45);
 }
 
 .map-locate-button {
@@ -494,6 +673,72 @@ th {
 
 .map-flight-inline-grid-4 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.map-airport-search-panel {
+  margin-top: 0.4rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(8, 12, 20, 0.78);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.map-airport-search-status {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  color: rgba(234, 239, 255, 0.86);
+  font-size: 0.82rem;
+}
+
+.map-airport-search-status-error {
+  color: #ffb8b8;
+}
+
+.map-airport-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.map-airport-search-results li {
+  margin: 0;
+}
+
+.map-airport-search-results button {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0;
+  background: transparent;
+  color: #f2f6fc;
+  text-align: left;
+  display: grid;
+  gap: 0.04rem;
+  cursor: pointer;
+  padding: 0.5rem 0.65rem;
+}
+
+.map-airport-search-results li:last-child button {
+  border-bottom: none;
+}
+
+.map-airport-search-results button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.map-airport-search-ident {
+  font-weight: 700;
+  font-size: 0.93rem;
+}
+
+.map-airport-search-name {
+  font-size: 0.84rem;
+}
+
+.map-airport-search-meta {
+  font-size: 0.8rem;
+  color: rgba(207, 219, 241, 0.9);
 }
 
 .map-flight-panel .waypoint-entry-box {
@@ -585,6 +830,16 @@ th {
     left: 0.6rem;
   }
 
+  .map-search-overlay {
+    top: 0.6rem;
+    right: 0.6rem;
+  }
+
+  .map-airport-info-overlay {
+    top: 3.95rem;
+    right: 0.6rem;
+  }
+
   .map-flight-inline-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -598,15 +853,27 @@ th {
     height: auto;
   }
 
+  .map-search-overlay {
+    position: static;
+    width: 100%;
+    order: 1;
+  }
+
+  .map-airport-info-overlay {
+    position: static;
+    width: 100%;
+    order: 2;
+  }
+
   .map-flight-panel {
     position: static;
     width: 100%;
     max-height: none;
-    order: 1;
+    order: 3;
   }
 
   .map-workspace .sectional-map {
-    order: 2;
+    order: 4;
     height: 500px;
     min-height: 500px;
   }

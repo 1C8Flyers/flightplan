@@ -51,11 +51,16 @@ let faaCache = null;
 let airportCache = null;
 let navaidCache = null;
 let airportFrequencyCache = null;
+let runwayCache = null;
 let sectionalCache = null;
 let windsAloftCache = null;
 let tfrCache = null;
 const sectionalGeoTiffCache = new Map();
 const sectionalOverlayCache = new Map();
+const nasrSubscriptionPageUrl = 'https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription';
+const nasrZipBaseUrl = 'https://nfdc.faa.gov/webContent/28DaySub';
+let nasrCycleCache = null;
+let nasrZipCache = null;
 const landmarkCache = new Map();
 const airportDiagramCache = new Map();
 async function fetchJson(url) {
@@ -165,6 +170,105 @@ function haversineNm(lat1, lon1, lat2, lon2) {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return radiusNm * c;
 }
+function parseDmsCoordinate(value) {
+    const text = value.trim().toUpperCase();
+    const match = text.match(/^(\d{2,3})-(\d{2})-(\d{2}(?:\.\d+)?)\s*([NSEW])$/);
+    if (!match) {
+        return Number.NaN;
+    }
+    const degrees = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3]);
+    const hemisphere = match[4];
+    const decimal = degrees + minutes / 60 + seconds / 3600;
+    return hemisphere === 'S' || hemisphere === 'W' ? -decimal : decimal;
+}
+function parseNumberOrNull(value) {
+    const parsed = Number(value.trim());
+    return Number.isNaN(parsed) ? null : parsed;
+}
+function parseFreqMhzToKhz(value) {
+    const text = value.trim();
+    if (!text) {
+        return null;
+    }
+    const parsed = Number(text);
+    if (Number.isNaN(parsed)) {
+        return null;
+    }
+    if (text.includes('.')) {
+        return Math.round(parsed * 1000);
+    }
+    return parsed;
+}
+async function fetchCurrentNasrCycle() {
+    const cacheWindowMs = 6 * 60 * 60 * 1000;
+    if (nasrCycleCache && Date.now() - nasrCycleCache.loadedAt < cacheWindowMs) {
+        return nasrCycleCache;
+    }
+    const response = await fetch(nasrSubscriptionPageUrl);
+    if (!response.ok) {
+        throw new Error(`NASR subscription page request failed (${response.status})`);
+    }
+    const html = await response.text();
+    const matches = [...html.matchAll(/28DaySubscription_Effective_(\d{4}-\d{2}-\d{2})\.zip/g)];
+    const dates = [...new Set(matches.map((match) => match[1]))].sort();
+    if (!dates.length) {
+        throw new Error('Unable to determine current NASR cycle date from FAA subscription page.');
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const currentOrPast = dates.filter((date) => date <= today);
+    const effectiveDate = currentOrPast.length ? currentOrPast[currentOrPast.length - 1] : dates[0];
+    const downloadUrl = `${nasrZipBaseUrl}/28DaySubscription_Effective_${effectiveDate}.zip`;
+    nasrCycleCache = {
+        loadedAt: Date.now(),
+        effectiveDate,
+        downloadUrl
+    };
+    return nasrCycleCache;
+}
+async function fetchNasrZip() {
+    const cycle = await fetchCurrentNasrCycle();
+    const cacheWindowMs = 6 * 60 * 60 * 1000;
+    if (nasrZipCache &&
+        nasrZipCache.effectiveDate === cycle.effectiveDate &&
+        Date.now() - nasrZipCache.loadedAt < cacheWindowMs) {
+        return { effectiveDate: nasrZipCache.effectiveDate, downloadUrl: cycle.downloadUrl, zip: nasrZipCache.zip };
+    }
+    const response = await fetch(cycle.downloadUrl);
+    if (!response.ok) {
+        throw new Error(`NASR subscription download failed (${response.status})`);
+    }
+    const zipBuffer = Buffer.from(await response.arrayBuffer());
+    const zip = new AdmZip(zipBuffer);
+    nasrZipCache = {
+        loadedAt: Date.now(),
+        effectiveDate: cycle.effectiveDate,
+        zip
+    };
+    return { effectiveDate: cycle.effectiveDate, downloadUrl: cycle.downloadUrl, zip };
+}
+function collectLatLonPairsFromGeometry(geometry) {
+    const pairs = [];
+    function walkCoordinates(value) {
+        if (!Array.isArray(value)) {
+            return;
+        }
+        if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+            pairs.push({ lon: value[0], lat: value[1] });
+            return;
+        }
+        for (const item of value) {
+            walkCoordinates(item);
+        }
+    }
+    if (typeof geometry !== 'object' || geometry == null) {
+        return pairs;
+    }
+    const coords = geometry.coordinates;
+    walkCoordinates(coords);
+    return pairs;
+}
 function routeProjection(depLat, depLon, arrLat, arrLon, pointLat, pointLon) {
     const lat0 = (depLat + arrLat) / 2;
     const cosLat = Math.cos(toRadians(lat0));
@@ -196,49 +300,38 @@ async function fetchAirportsDataset() {
     if (airportCache && Date.now() - airportCache.loadedAt < cacheWindowMs) {
         return airportCache.airports;
     }
-    const response = await fetch('https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv');
-    if (!response.ok) {
-        throw new Error(`Airport dataset request failed (${response.status})`);
-    }
-    const csv = await response.text();
-    const rows = csv.split(/\r?\n/);
-    const headers = parseCsvLine(rows[0]);
-    const identIndex = headers.indexOf('ident');
-    const nameIndex = headers.indexOf('name');
-    const municipalityIndex = headers.indexOf('municipality');
-    const isoRegionIndex = headers.indexOf('iso_region');
-    const latIndex = headers.indexOf('latitude_deg');
-    const lonIndex = headers.indexOf('longitude_deg');
-    const typeIndex = headers.indexOf('type');
-    const countryIndex = headers.indexOf('iso_country');
-    const iataIndex = headers.indexOf('iata_code');
-    const localIndex = headers.indexOf('local_code');
-    const gpsIndex = headers.indexOf('gps_code');
+    const { zip } = await fetchNasrZip();
+    const aptText = zip.readAsText('APT.txt');
+    const lines = aptText.split(/\r?\n/);
     const airports = [];
-    for (let index = 1; index < rows.length; index += 1) {
-        const row = rows[index];
-        if (!row.trim()) {
+    for (const line of lines) {
+        if (!line.startsWith('APT') || line.length < 1000) {
             continue;
         }
-        const cols = parseCsvLine(row);
-        const ident = cols[identIndex] ?? '';
-        const name = cols[nameIndex] ?? '';
-        const municipality = cols[municipalityIndex] ? cols[municipalityIndex].trim() : null;
-        const isoRegion = cols[isoRegionIndex] ? cols[isoRegionIndex].trim() : null;
-        const type = cols[typeIndex] ?? '';
-        const lat = Number(cols[latIndex]);
-        const lon = Number(cols[lonIndex]);
-        const isoCountry = cols[countryIndex] ?? '';
-        const iataCode = cols[iataIndex] ? cols[iataIndex].toUpperCase() : null;
-        const localCode = cols[localIndex] ? cols[localIndex].toUpperCase() : null;
-        const gpsCode = cols[gpsIndex] ? cols[gpsIndex].toUpperCase() : null;
+        const ident = line.slice(27, 31).trim().toUpperCase();
+        const name = line.slice(133, 183).trim();
+        const city = line.slice(93, 133).trim();
+        const state = line.slice(48, 50).trim().toUpperCase();
+        const latText = line.slice(523, 538);
+        const lonText = line.slice(550, 565);
+        const lat = parseDmsCoordinate(latText);
+        const lon = parseDmsCoordinate(lonText);
         if (!ident || !name || Number.isNaN(lat) || Number.isNaN(lon)) {
             continue;
         }
-        if (isoCountry !== 'US') {
-            continue;
-        }
-        airports.push({ ident, name, municipality, isoRegion, lat, lon, type, isoCountry, iataCode, localCode, gpsCode });
+        airports.push({
+            ident,
+            name,
+            municipality: city || null,
+            isoRegion: state ? `US-${state}` : null,
+            lat,
+            lon,
+            type: 'small_airport',
+            isoCountry: 'US',
+            iataCode: null,
+            localCode: ident,
+            gpsCode: ident
+        });
     }
     airportCache = { loadedAt: Date.now(), airports };
     return airports;
@@ -317,34 +410,21 @@ async function fetchNavaidsDataset() {
     if (navaidCache && Date.now() - navaidCache.loadedAt < cacheWindowMs) {
         return navaidCache.navaids;
     }
-    const response = await fetch('https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/navaids.csv');
-    if (!response.ok) {
-        throw new Error(`Navaid dataset request failed (${response.status})`);
-    }
-    const csv = await response.text();
-    const rows = csv.split(/\r?\n/);
-    const headers = parseCsvLine(rows[0]);
-    const identIndex = headers.indexOf('ident');
-    const nameIndex = headers.indexOf('name');
-    const typeIndex = headers.indexOf('type');
-    const latIndex = headers.indexOf('latitude_deg');
-    const lonIndex = headers.indexOf('longitude_deg');
-    const frequencyKhzIndex = headers.indexOf('frequency_khz');
-    const dmeFrequencyKhzIndex = headers.indexOf('dme_frequency_khz');
+    const { zip } = await fetchNasrZip();
+    const navText = zip.readAsText('NAV.txt');
+    const lines = navText.split(/\r?\n/);
     const navaids = [];
-    for (let index = 1; index < rows.length; index += 1) {
-        const row = rows[index];
-        if (!row.trim()) {
+    for (const line of lines) {
+        if (!line.startsWith('NAV1') || line.length < 560) {
             continue;
         }
-        const cols = parseCsvLine(row);
-        const ident = (cols[identIndex] ?? '').toUpperCase().trim();
-        const name = (cols[nameIndex] ?? '').trim();
-        const type = (cols[typeIndex] ?? '').trim().toUpperCase();
-        const lat = Number(cols[latIndex]);
-        const lon = Number(cols[lonIndex]);
-        const frequencyKhz = cols[frequencyKhzIndex] ? Number(cols[frequencyKhzIndex]) : null;
-        const dmeFrequencyKhz = cols[dmeFrequencyKhzIndex] ? Number(cols[dmeFrequencyKhzIndex]) : null;
+        const ident = line.slice(4, 8).trim().toUpperCase();
+        const type = line.slice(8, 28).trim().toUpperCase();
+        const name = line.slice(42, 72).trim();
+        const lat = parseDmsCoordinate(line.slice(371, 385));
+        const lon = parseDmsCoordinate(line.slice(396, 410));
+        const frequencyKhz = parseFreqMhzToKhz(line.slice(533, 539));
+        const dmeFrequencyKhz = parseFreqMhzToKhz(line.slice(529, 533));
         if (!ident || !name || Number.isNaN(lat) || Number.isNaN(lon)) {
             continue;
         }
@@ -354,8 +434,8 @@ async function fetchNavaidsDataset() {
             type,
             lat,
             lon,
-            frequencyKhz: frequencyKhz != null && !Number.isNaN(frequencyKhz) ? frequencyKhz : null,
-            dmeFrequencyKhz: dmeFrequencyKhz != null && !Number.isNaN(dmeFrequencyKhz) ? dmeFrequencyKhz : null
+            frequencyKhz,
+            dmeFrequencyKhz
         });
     }
     navaidCache = { loadedAt: Date.now(), navaids };
@@ -366,40 +446,204 @@ async function fetchAirportFrequenciesDataset() {
     if (airportFrequencyCache && Date.now() - airportFrequencyCache.loadedAt < cacheWindowMs) {
         return airportFrequencyCache.frequencies;
     }
-    const response = await fetch('https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airport-frequencies.csv');
-    if (!response.ok) {
-        throw new Error(`Airport frequency dataset request failed (${response.status})`);
-    }
-    const csv = await response.text();
-    const rows = csv.split(/\r?\n/);
-    const headers = parseCsvLine(rows[0]);
-    const airportIdentIndex = headers.indexOf('airport_ident');
-    const typeIndex = headers.indexOf('type');
-    const descriptionIndex = headers.indexOf('description');
-    const frequencyIndex = headers.indexOf('frequency_mhz');
+    const { zip } = await fetchNasrZip();
+    const aptText = zip.readAsText('APT.txt');
+    const lines = aptText.split(/\r?\n/);
+    const airportIdentBySiteKey = new Map();
+    const knownAirportIdents = new Set();
+    const inferCommType = (text) => {
+        const normalized = text.toUpperCase();
+        if (normalized.includes('AWOS'))
+            return 'AWOS';
+        if (normalized.includes('ASOS'))
+            return 'ASOS';
+        if (normalized.includes('ATIS'))
+            return 'ATIS';
+        if (normalized.includes('CTAF'))
+            return 'CTAF';
+        if (normalized.includes('UNICOM') || normalized.includes('UNIC '))
+            return 'UNICOM';
+        if (normalized.includes('MULTICOM'))
+            return 'MULTICOM';
+        if (normalized.includes('TOWER') || normalized.includes(' TWR'))
+            return 'TWR';
+        if (normalized.includes('GROUND') || normalized.includes(' GND'))
+            return 'GND';
+        if (normalized.includes('APPROACH') || normalized.includes(' APP'))
+            return 'APP';
+        if (normalized.includes('DEPARTURE') || normalized.includes(' DEP'))
+            return 'DEP';
+        if (normalized.includes('CLEARANCE') || normalized.includes('CLNC'))
+            return 'CLNC';
+        if (normalized.includes('FSS') || normalized.includes('RDO'))
+            return 'FSS';
+        return null;
+    };
+    const commFrequencyRegex = /\b1(?:1[8-9]|2\d|3[0-6])\.\d{1,3}\b/g;
     const frequencies = [];
-    for (let index = 1; index < rows.length; index += 1) {
-        const row = rows[index];
-        if (!row.trim()) {
+    for (const line of lines) {
+        if (!line.startsWith('APT') || line.length < 1000) {
             continue;
         }
-        const cols = parseCsvLine(row);
-        const airportIdent = (cols[airportIdentIndex] ?? '').toUpperCase().trim();
-        const type = (cols[typeIndex] ?? '').toUpperCase().trim();
-        const description = (cols[descriptionIndex] ?? '').trim();
-        const frequencyMHz = (cols[frequencyIndex] ?? '').trim();
-        if (!airportIdent || !type || !frequencyMHz) {
+        const siteKey = line.slice(3, 14);
+        const airportIdent = line.slice(27, 31).trim().toUpperCase();
+        const unicom = line.slice(981, 988).trim();
+        const ctaf = line.slice(988, 995).trim();
+        if (!airportIdent) {
             continue;
         }
-        frequencies.push({
-            airportIdent,
-            type,
-            description,
-            frequencyMHz
-        });
+        knownAirportIdents.add(airportIdent);
+        if (siteKey) {
+            airportIdentBySiteKey.set(siteKey, airportIdent);
+        }
+        if (unicom) {
+            frequencies.push({
+                airportIdent,
+                type: 'UNICOM',
+                description: 'UNICOM',
+                frequencyMHz: unicom
+            });
+        }
+        if (ctaf) {
+            frequencies.push({
+                airportIdent,
+                type: 'CTAF',
+                description: 'Common Traffic Advisory Frequency',
+                frequencyMHz: ctaf
+            });
+        }
+    }
+    for (const line of lines) {
+        if (!line.startsWith('RMK') || line.length < 32) {
+            continue;
+        }
+        const siteKey = line.slice(3, 14);
+        const airportIdent = airportIdentBySiteKey.get(siteKey);
+        if (!airportIdent) {
+            continue;
+        }
+        const remarkElement = line.slice(16, 31).trim();
+        const remarkText = line.slice(31).trim();
+        const combinedRemark = `${remarkElement} ${remarkText}`.trim();
+        const frequencyType = inferCommType(combinedRemark);
+        if (!frequencyType) {
+            continue;
+        }
+        const matches = [...combinedRemark.matchAll(commFrequencyRegex)];
+        for (const match of matches) {
+            const rawFrequency = match[0];
+            const parsed = Number(rawFrequency);
+            if (Number.isNaN(parsed)) {
+                continue;
+            }
+            frequencies.push({
+                airportIdent,
+                type: frequencyType,
+                description: frequencyType,
+                frequencyMHz: parsed.toFixed(3)
+            });
+        }
+    }
+    const supplementalFiles = [
+        { name: 'TWR.txt', defaultType: 'TWR' },
+        { name: 'COM.txt', defaultType: 'RDO' },
+        { name: 'FSS.txt', defaultType: 'FSS' },
+        { name: 'AWOS.txt', defaultType: 'AWOS' },
+        { name: 'WXL.txt', defaultType: 'ASOS' }
+    ];
+    for (const { name, defaultType } of supplementalFiles) {
+        const entry = zip.getEntry(name);
+        if (!entry) {
+            continue;
+        }
+        const text = zip.readAsText(name);
+        const supplementalLines = text.split(/\r?\n/);
+        for (const line of supplementalLines) {
+            if (!line.trim()) {
+                continue;
+            }
+            const upper = line.toUpperCase();
+            const frequencyMatches = [...upper.matchAll(commFrequencyRegex)];
+            if (!frequencyMatches.length) {
+                continue;
+            }
+            const tokens = upper.split(/[^A-Z0-9]+/).filter(Boolean);
+            const airportIdent = tokens.find((token) => knownAirportIdents.has(token)) ?? null;
+            if (!airportIdent) {
+                continue;
+            }
+            const frequencyType = inferCommType(upper) ?? defaultType;
+            for (const match of frequencyMatches) {
+                const rawFrequency = match[0];
+                const parsed = Number(rawFrequency);
+                if (Number.isNaN(parsed)) {
+                    continue;
+                }
+                frequencies.push({
+                    airportIdent,
+                    type: frequencyType,
+                    description: frequencyType,
+                    frequencyMHz: parsed.toFixed(3)
+                });
+            }
+        }
     }
     airportFrequencyCache = { loadedAt: Date.now(), frequencies };
     return frequencies;
+}
+async function fetchRunwaysDataset() {
+    const cacheWindowMs = 24 * 60 * 60 * 1000;
+    if (runwayCache && Date.now() - runwayCache.loadedAt < cacheWindowMs) {
+        return runwayCache.runways;
+    }
+    const { zip } = await fetchNasrZip();
+    const aptText = zip.readAsText('APT.txt');
+    const lines = aptText.split(/\r?\n/);
+    const airportIdentByKey = new Map();
+    for (const line of lines) {
+        if (!line.startsWith('APT') || line.length < 32) {
+            continue;
+        }
+        const parentKey = line.slice(3, 11);
+        const ident = line.slice(27, 31).trim().toUpperCase();
+        if (parentKey && ident) {
+            airportIdentByKey.set(parentKey, ident);
+        }
+    }
+    const runways = [];
+    for (const line of lines) {
+        if (!line.startsWith('RWY') || line.length < 120) {
+            continue;
+        }
+        const parentKey = line.slice(3, 11);
+        const airportIdent = airportIdentByKey.get(parentKey) ?? '';
+        const runwayIdent = line.slice(16, 23).trim().toUpperCase();
+        if (!airportIdent || !runwayIdent) {
+            continue;
+        }
+        const [leIdent, heIdent] = runwayIdent.split('/').map((value) => value.trim() || null);
+        const lengthFt = parseNumberOrNull(line.slice(24, 28));
+        const widthFt = parseNumberOrNull(line.slice(29, 32));
+        const surface = line.slice(32, 44).trim() || null;
+        const lighting = line.slice(44, 60).trim().toUpperCase();
+        const lighted = lighting.includes('MED') || lighting.includes('HIGH') || lighting.includes('LOW');
+        const closed = line.includes('CLSD');
+        runways.push({
+            id: `${airportIdent}-${runwayIdent}`,
+            airportIdent,
+            lengthFt,
+            widthFt,
+            surface,
+            lighted,
+            closed,
+            leIdent,
+            heIdent,
+            leHeadingDeg: null,
+            heHeadingDeg: null
+        });
+    }
+    runwayCache = { loadedAt: Date.now(), runways };
+    return runways;
 }
 function rankFrequencyType(type) {
     const order = [
@@ -865,6 +1109,19 @@ async function fetchSectionalCharts() {
 app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
 });
+app.get('/api/data-cycle', async (_req, res) => {
+    try {
+        const cycle = await fetchCurrentNasrCycle();
+        res.json({
+            source: 'FAA NASR 28-Day Subscription',
+            effectiveDate: cycle.effectiveDate,
+            downloadUrl: cycle.downloadUrl
+        });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 app.get('/api/airport/nearest', async (req, res) => {
     try {
         const lat = Number(req.query.lat);
@@ -912,7 +1169,7 @@ app.get('/api/airport/nearest', async (req, res) => {
                 lat: station?.lat ?? dataset?.lat,
                 lon: station?.lon ?? dataset?.lon,
                 elevationMeters: station?.elev ?? null,
-                state: station?.state ?? null,
+                state: station?.state ?? (dataset?.isoRegion?.startsWith('US-') ? dataset.isoRegion.slice(3) : null),
                 country: station?.country ?? dataset?.isoCountry ?? null
             },
             distanceNm: Number(nearest.distanceNm.toFixed(1)),
@@ -955,7 +1212,7 @@ app.get('/api/airport/:icao', async (req, res) => {
                 lat: station?.lat ?? dataset?.lat ?? 0,
                 lon: station?.lon ?? dataset?.lon ?? 0,
                 elevationMeters: station?.elev ?? null,
-                state: station?.state ?? null,
+                state: station?.state ?? (dataset?.isoRegion?.startsWith('US-') ? dataset.isoRegion.slice(3) : null),
                 country: station?.country ?? dataset?.isoCountry ?? null
             },
             faa: {
@@ -1063,6 +1320,78 @@ app.get('/api/frequencies/:icao', async (req, res) => {
         })
             .slice(0, 18);
         res.json({ frequencies });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/runways/:icao', async (req, res) => {
+    try {
+        const resolved = await resolveAirport(req.params.icao);
+        const allRunways = await fetchRunwaysDataset();
+        const candidates = [
+            resolved.station?.icaoId,
+            resolved.station?.faaId,
+            resolved.station?.iataId,
+            resolved.station?.icaoId?.replace(/^K/, ''),
+            resolved.dataset?.ident,
+            resolved.dataset?.gpsCode,
+            resolved.dataset?.localCode,
+            resolved.dataset?.iataCode,
+            resolved.inputCode
+        ]
+            .filter(Boolean)
+            .map((value) => String(value).toUpperCase());
+        const runways = allRunways
+            .filter((runway) => candidates.includes(runway.airportIdent))
+            .sort((a, b) => {
+            const aLength = a.lengthFt ?? 0;
+            const bLength = b.lengthFt ?? 0;
+            return bLength - aLength;
+        })
+            .slice(0, 16);
+        res.json({ runways });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/notams/:icao', async (req, res) => {
+    try {
+        const resolved = await resolveAirport(req.params.icao);
+        const lat = resolved.station?.lat ?? resolved.dataset?.lat ?? null;
+        const lon = resolved.station?.lon ?? resolved.dataset?.lon ?? null;
+        if (lat == null || lon == null) {
+            res.json({ notams: [] });
+            return;
+        }
+        const tfrs = await fetchTfrGeoJson();
+        const notams = tfrs.features
+            .map((feature) => {
+            const properties = feature.properties ?? {};
+            const points = collectLatLonPairsFromGeometry(feature.geometry);
+            const distanceNm = points.length
+                ? Math.min(...points.map((point) => haversineNm(lat, lon, point.lat, point.lon)))
+                : null;
+            return {
+                id: String(properties.NOTAM_KEY ?? properties.GID ?? properties.NAME ?? 'TFR'),
+                title: String(properties.TITLE ?? properties.NAME ?? 'Temporary Flight Restriction'),
+                type: String(properties.TYPE_CODE ?? properties.TYPE ?? 'TFR'),
+                source: 'FAA TFR',
+                effective: properties.DATE_START ? String(properties.DATE_START) : null,
+                expires: properties.DATE_END ? String(properties.DATE_END) : null,
+                lastUpdated: properties.LAST_MODIFICATION_DATETIME
+                    ? String(properties.LAST_MODIFICATION_DATETIME)
+                    : properties.NOTEBOOK_UPDATE_DATETIME
+                        ? String(properties.NOTEBOOK_UPDATE_DATETIME)
+                        : null,
+                distanceNm
+            };
+        })
+            .filter((item) => item.distanceNm == null || item.distanceNm <= 150)
+            .sort((a, b) => (a.distanceNm ?? Number.POSITIVE_INFINITY) - (b.distanceNm ?? Number.POSITIVE_INFINITY))
+            .slice(0, 25);
+        res.json({ notams });
     }
     catch (error) {
         res.status(500).json({ error: error.message });

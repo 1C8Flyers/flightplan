@@ -20,10 +20,15 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 
 ## Data Sources
 
-- Airport + weather: `https://aviationweather.gov/api/data/*`
+- Airport weather: `https://aviationweather.gov/api/data/*`
 - FAA delays: `https://nasstatus.faa.gov/api/airport-status-information`
 - FAA sectionals: `https://aeronav.faa.gov/visual/*/PDFs/*.pdf`
-- Airport suggestions dataset: `https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv`
+- FAA NASR 28-Day Subscription (airport, frequency, runway, navaid datasets): `https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription`
+
+### FAA NASR Cycle Metadata
+
+- API endpoint: `GET /api/data-cycle`
+- Response includes the detected NASR effective date and ZIP URL currently in use by the server.
 
 ## Stack
 
