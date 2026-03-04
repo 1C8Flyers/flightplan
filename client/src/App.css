@@ -915,6 +915,30 @@ th {
   background: #1565c0;
 }
 
+.route-insert-handle-icon {
+  background: transparent;
+  border: none;
+}
+
+.route-insert-handle {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  background: #0d47a1;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.sectional-map.sectional-map-route-insert {
+  cursor: grabbing;
+}
+
 .tfr-popup {
   min-width: 190px;
   line-height: 1.35;

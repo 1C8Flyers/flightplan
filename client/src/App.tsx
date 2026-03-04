@@ -449,6 +449,7 @@ function App() {
   const [planMapError, setPlanMapError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
+  const [routeInsertDragging, setRouteInsertDragging] = useState(false)
 
   const recalcRequestIdRef = useRef(0)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
@@ -458,6 +459,8 @@ function App() {
   const tfrLayerRef = useRef<any>(null)
   const routeLayerRef = useRef<any>(null)
   const markerLayerRef = useRef<any>(null)
+  const suppressNextMapClickRef = useRef(false)
+  const routeInsertHandleRef = useRef<any>(null)
 
   const totals = useMemo(() => {
     const totalDistance = legs.reduce((sum, leg) => sum + leg.distanceNm, 0)
@@ -1542,6 +1545,11 @@ function App() {
         recenterToUserLocation(false)
 
         mapRef.current.on('click', async (event: { latlng: { lat: number; lng: number } }) => {
+          if (suppressNextMapClickRef.current) {
+            suppressNextMapClickRef.current = false
+            return
+          }
+
           try {
             const nearest = await fetchJson<NearestAirportResponse>(
               `/api/airport/nearest?lat=${event.latlng.lat}&lon=${event.latlng.lng}`
@@ -1730,6 +1738,159 @@ function App() {
           opacity: 0.95
         }
       )
+
+      const findClosestLegIndex = (lat: number, lon: number) => {
+        if (routePoints.length < 2) {
+          return 0
+        }
+
+        const toLayerPoint = (valueLat: number, valueLon: number) => map.latLngToLayerPoint([valueLat, valueLon])
+        const point = toLayerPoint(lat, lon)
+        let closestLegIndex = 0
+        let closestDistanceSquared = Number.POSITIVE_INFINITY
+
+        for (let i = 0; i < routePoints.length - 1; i += 1) {
+          const from = toLayerPoint(routePoints[i].lat, routePoints[i].lon)
+          const to = toLayerPoint(routePoints[i + 1].lat, routePoints[i + 1].lon)
+          const dx = to.x - from.x
+          const dy = to.y - from.y
+          const denominator = dx * dx + dy * dy
+          const ratio = denominator === 0
+            ? 0
+            : Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / denominator))
+          const projectedX = from.x + ratio * dx
+          const projectedY = from.y + ratio * dy
+          const distanceSquared = (point.x - projectedX) ** 2 + (point.y - projectedY) ** 2
+
+          if (distanceSquared < closestDistanceSquared) {
+            closestDistanceSquared = distanceSquared
+            closestLegIndex = i
+          }
+        }
+
+        return closestLegIndex
+      }
+
+      const buildInsertedRoute = (legIndex: number, lat: number, lon: number) => {
+        const inserted = [...routePoints]
+        inserted.splice(legIndex + 1, 0, {
+          ident: `WP${legIndex + 1}`,
+          lat,
+          lon,
+          originalIdent: `WP${legIndex + 1}`,
+          originalLat: lat,
+          originalLon: lon
+        })
+        return inserted
+      }
+
+      routeLayerRef.current.on('mousedown', (event: {
+        latlng: { lat: number; lng: number }
+        originalEvent?: { preventDefault?: () => void; stopPropagation?: () => void }
+      }) => {
+        if (!mapRef.current || routePoints.length < 2) {
+          return
+        }
+
+        event.originalEvent?.preventDefault?.()
+        event.originalEvent?.stopPropagation?.()
+
+        suppressNextMapClickRef.current = true
+        setRouteInsertDragging(true)
+
+        const legIndex = findClosestLegIndex(event.latlng.lat, event.latlng.lng)
+        let dragLat = event.latlng.lat
+        let dragLon = event.latlng.lng
+
+        const insertHandleIcon = leaflet.divIcon({
+          className: 'route-insert-handle-icon',
+          html: '<span class="route-insert-handle" aria-hidden="true">+</span>',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        })
+
+        if (routeInsertHandleRef.current) {
+          map.removeLayer(routeInsertHandleRef.current)
+          routeInsertHandleRef.current = null
+        }
+
+        routeInsertHandleRef.current = leaflet.marker([dragLat, dragLon], {
+          icon: insertHandleIcon,
+          interactive: false
+        }).addTo(map)
+
+        const updatePreview = () => {
+          if (!routeLayerRef.current) {
+            return
+          }
+
+          const preview = buildInsertedRoute(legIndex, dragLat, dragLon)
+          routeLayerRef.current.setLatLngs(preview.map((point) => [point.lat, point.lon]))
+
+          if (routeInsertHandleRef.current) {
+            routeInsertHandleRef.current.setLatLng([dragLat, dragLon])
+          }
+        }
+
+        updatePreview()
+        map.dragging.disable()
+
+        const handleMouseMove = (moveEvent: { latlng: { lat: number; lng: number } }) => {
+          dragLat = moveEvent.latlng.lat
+          dragLon = moveEvent.latlng.lng
+          updatePreview()
+        }
+
+        const handleMouseUp = (upEvent: { latlng: { lat: number; lng: number } }) => {
+          map.off('mousemove', handleMouseMove)
+          map.off('mouseup', handleMouseUp)
+          map.dragging.enable()
+          setRouteInsertDragging(false)
+
+          if (routeInsertHandleRef.current) {
+            map.removeLayer(routeInsertHandleRef.current)
+            routeInsertHandleRef.current = null
+          }
+
+          void (async () => {
+            try {
+              const finalLat = upEvent.latlng.lat
+              const finalLon = upEvent.latlng.lng
+              const landmark = await fetchJson<LandmarkNameResponse>(
+                `/api/landmark-name?lat=${finalLat}&lon=${finalLon}`
+              )
+
+              const waypointIdent = landmark.ident ?? `WP${legIndex + 1}`
+              const insertedPoints = [...routePoints]
+              insertedPoints.splice(legIndex + 1, 0, {
+                ident: waypointIdent,
+                lat: finalLat,
+                lon: finalLon,
+                originalIdent: waypointIdent,
+                originalLat: finalLat,
+                originalLon: finalLon
+              })
+
+              setRoutePoints(insertedPoints)
+              setWaypointsInput(toWaypointInputFromRoute(insertedPoints))
+              await Promise.all([
+                recomputeRouteCalculations(insertedPoints),
+                loadRouteNavaids(insertedPoints)
+              ])
+            } catch (caughtError) {
+              if (routeLayerRef.current) {
+                routeLayerRef.current.setLatLngs(routePoints.map((point) => [point.lat, point.lon]))
+              }
+
+              setError((caughtError as Error).message)
+            }
+          })()
+        }
+
+        map.on('mousemove', handleMouseMove)
+        map.on('mouseup', handleMouseUp)
+      })
+
       routeLayerRef.current.addTo(map)
       map.fitBounds(routeLayerRef.current.getBounds(), { padding: [20, 20] })
 
@@ -1845,6 +2006,7 @@ function App() {
       tfrLayerRef.current = null
       routeLayerRef.current = null
       markerLayerRef.current = null
+      routeInsertHandleRef.current = null
     }
   }, [])
 
@@ -1852,7 +2014,10 @@ function App() {
     <main className="app">
       <section className="screen-only map-shell">
         <div className="map-workspace">
-          <div ref={mapContainerRef} className="sectional-map" />
+          <div
+            ref={mapContainerRef}
+            className={`sectional-map${routeInsertDragging ? ' sectional-map-route-insert' : ''}`}
+          />
 
           <div className="map-search-overlay" ref={mapSearchContainerRef}>
             <label className="map-search-box">
@@ -2343,7 +2508,7 @@ function App() {
         </div>
 
         <p>
-          Drag blue waypoint markers to visually edit the route. Start/end markers stay fixed to departure/arrival airports.
+          Drag blue waypoint markers to edit existing waypoints, or drag the red route line to insert a new waypoint. Start/end markers stay fixed to departure/arrival airports.
         </p>
       </section>
 
