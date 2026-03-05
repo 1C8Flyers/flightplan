@@ -447,6 +447,22 @@ th {
   z-index: 620;
 }
 
+.map-search-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35rem;
+}
+
+.map-ask-ai-toggle {
+  border-radius: 999px;
+  border: 1px solid rgba(117, 168, 255, 0.65);
+  background: rgba(17, 22, 33, 0.95);
+  color: #f7f9ff;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.2rem 0.62rem;
+}
+
 .map-search-box {
   display: flex;
   flex-direction: row;
@@ -489,6 +505,132 @@ th {
   right: 0.75rem;
   width: min(360px, calc(100% - 1.5rem));
   z-index: 610;
+}
+
+.ai-drawer {
+  position: absolute;
+  top: 4.1rem;
+  right: calc(min(360px, calc(100% - 1.5rem)) + 0.6rem);
+  width: min(420px, calc(100% - 1.5rem));
+  max-height: calc(100% - 4.9rem);
+  overflow: auto;
+  border: 1px solid #4a5675;
+  border-radius: 10px;
+  background: rgba(17, 22, 33, 0.95);
+  color: #f7f9ff;
+  padding: 0.58rem;
+  backdrop-filter: blur(2px);
+  z-index: 615;
+}
+
+.ai-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.ai-drawer-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ai-drawer-close {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #f7f9ff;
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0.05rem 0.25rem;
+}
+
+.ai-drawer-input-wrap {
+  display: grid;
+  gap: 0.3rem;
+  color: #f7f9ff;
+  font-size: 0.82rem;
+}
+
+.ai-drawer-input-wrap textarea {
+  background: rgba(10, 14, 24, 0.78);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+  min-height: 74px;
+  resize: vertical;
+}
+
+.ai-drawer-context {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(8, 12, 20, 0.7);
+  padding: 0.4rem 0.46rem;
+}
+
+.ai-drawer-context h4,
+.ai-drawer-response h4,
+.ai-drawer-response h5 {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.ai-drawer-context ul,
+.ai-drawer-response ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.05rem;
+  font-size: 0.8rem;
+}
+
+.ai-drawer-actions {
+  margin-top: 0.45rem;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.ai-drawer-send {
+  border: 1px solid rgba(117, 168, 255, 0.58);
+  background: rgba(40, 89, 156, 0.66);
+  color: #eef4ff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.18rem 0.56rem;
+}
+
+.ai-drawer-send.ai-drawer-send-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.ai-drawer-error {
+  margin: 0.4rem 0 0;
+  color: #ffb8b8;
+  font-size: 0.82rem;
+}
+
+.ai-drawer-response {
+  margin-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  padding-top: 0.45rem;
+}
+
+.ai-drawer-response p {
+  margin: 0.34rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.ai-drawer-response-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.ai-drawer-warnings {
+  color: #ffd89a;
 }
 
 .map-airport-info-overlay .map-airport-info {
@@ -673,6 +815,89 @@ th {
   background: rgba(255, 255, 255, 0.04);
   display: grid;
   gap: 0.12rem;
+}
+
+.map-airspace-select {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  gap: 0.12rem;
+  text-align: left;
+  padding: 0;
+}
+
+.map-airspace-list-item-active {
+  border-color: rgba(148, 186, 255, 0.7);
+  background: rgba(117, 168, 255, 0.14);
+}
+
+.map-airspace-brief {
+  display: grid;
+  gap: 0.38rem;
+  margin-top: 0.3rem;
+}
+
+.ai-brief-card {
+  margin-top: 0.35rem;
+  border: 1px solid rgba(148, 186, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(16, 23, 36, 0.74);
+  padding: 0.45rem 0.5rem;
+}
+
+.ai-brief-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.ai-brief-card-header h4 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.ai-brief-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.ai-brief-button {
+  border: 1px solid rgba(117, 168, 255, 0.58);
+  background: rgba(40, 89, 156, 0.66);
+  color: #eef4ff;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+}
+
+.ai-brief-button.ai-brief-button-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.ai-brief-loading,
+.ai-brief-error,
+.ai-brief-content p {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.ai-brief-error {
+  color: #ffb8b8;
+}
+
+.ai-brief-notes {
+  color: rgba(207, 219, 241, 0.92);
+}
+
+.ai-brief-warning {
+  color: #ffd89a;
 }
 
 .map-airport-info-link {
@@ -1172,6 +1397,13 @@ th {
     right: 0.6rem;
   }
 
+  .ai-drawer {
+    top: 3.95rem;
+    right: 0.6rem;
+    width: min(460px, calc(100% - 1.2rem));
+    max-height: calc(100% - 4.55rem);
+  }
+
   .map-flight-inline-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1194,6 +1426,13 @@ th {
   .map-airport-info-overlay {
     position: static;
     width: 100%;
+    order: 2;
+  }
+
+  .ai-drawer {
+    position: static;
+    width: 100%;
+    max-height: none;
     order: 2;
   }
 

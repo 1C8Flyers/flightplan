@@ -4,6 +4,7 @@ type AiServiceModule = {
   explainMetar: (metar: string) => Promise<Record<string, unknown>>
   airportBrief: (airportData: unknown) => Promise<Record<string, unknown>>
   explainAirspace: (airspaceData: unknown) => Promise<Record<string, unknown>>
+  askWithContext: (question: string, context: unknown) => Promise<Record<string, unknown>>
 }
 
 let aiServicePromise: Promise<AiServiceModule> | null = null
@@ -63,6 +64,38 @@ export function registerAiRoutes(app: Express) {
       res.json(explanation)
     } catch {
       res.status(500).json({ summary: 'Unable to generate AI explanation.' })
+    }
+  })
+
+  app.post('/api/ai/context/ask', async (req, res) => {
+    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : ''
+    const context = req.body?.context
+
+    if (!question) {
+      res.status(400).json({ error: 'question is required.' })
+      return
+    }
+
+    if (question.length > 500) {
+      res.status(400).json({ error: 'question must be 500 characters or fewer.' })
+      return
+    }
+
+    if (!context || typeof context !== 'object' || Array.isArray(context)) {
+      res.status(400).json({ error: 'context object is required.' })
+      return
+    }
+
+    try {
+      const { askWithContext } = await getAiService()
+      const answer = await askWithContext(question, context)
+      res.json(answer)
+    } catch {
+      res.status(500).json({
+        answer: 'Unable to generate AI explanation.',
+        keyPoints: [],
+        warnings: ['AI-generated. Verify with official sources and pilot judgment.']
+      })
     }
   })
 }

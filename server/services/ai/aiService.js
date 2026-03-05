@@ -1,12 +1,14 @@
 import OpenAI from "openai";
 
 import { getCache, setCache } from "./cache.js";
-import { airspacePrompt, airportPrompt, metarPrompt } from "./prompts.js";
+import { airspacePrompt, airportPrompt, contextAskPrompt, metarPrompt } from "./prompts.js";
 
 const MODEL = "gpt-4.1-mini";
 const FALLBACK_RESPONSE = {
   summary: "Unable to generate AI explanation.",
 };
+const CONTEXT_ASK_DISCLAIMER = "AI-generated. Verify with official sources and pilot judgment.";
+const CONTEXT_SIZE_LIMIT_BYTES = 25 * 1024;
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -32,6 +34,42 @@ function normalizeStructuredResponse(parsed) {
   return result;
 }
 
+function normalizeContextAskResponse(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+
+  if (typeof parsed.answer !== "string" || !parsed.answer.trim()) {
+    return null;
+  }
+
+  const keyPoints = Array.isArray(parsed.keyPoints)
+    ? parsed.keyPoints
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 7)
+    : [];
+
+  const warnings = Array.isArray(parsed.warnings)
+    ? parsed.warnings
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
+
+  const uniqueWarnings = warnings.includes(CONTEXT_ASK_DISCLAIMER)
+    ? warnings
+    : [...warnings, CONTEXT_ASK_DISCLAIMER];
+
+  return {
+    answer: parsed.answer.trim(),
+    keyPoints,
+    warnings: uniqueWarnings,
+  };
+}
+
 function extractJsonObject(text) {
   if (typeof text !== "string") {
     return null;
@@ -53,6 +91,132 @@ function safeJsonParse(text) {
   } catch {
     return null;
   }
+}
+
+function truncateString(value, maxLen = 1200) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return null;
+  }
+
+  if (text.length <= maxLen) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLen)}…`;
+}
+
+function sanitizePrimitive(value) {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    return truncateString(value, 500);
+  }
+
+  return null;
+}
+
+function sanitizeUnknown(value, depth = 0) {
+  if (depth > 3) {
+    return null;
+  }
+
+  const primitive = sanitizePrimitive(value);
+  if (primitive !== null || value == null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return primitive;
+  }
+
+  if (Array.isArray(value)) {
+    const sanitizedArray = value
+      .slice(0, 12)
+      .map((item) => sanitizeUnknown(item, depth + 1))
+      .filter((item) => item !== null);
+
+    return sanitizedArray;
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value).slice(0, 20);
+    const result = {};
+
+    for (const [key, item] of entries) {
+      const sanitizedItem = sanitizeUnknown(item, depth + 1);
+      if (sanitizedItem !== null) {
+        result[key] = sanitizedItem;
+      }
+    }
+
+    return result;
+  }
+
+  return null;
+}
+
+function trimToByteLimit(input, maxBytes) {
+  const text = JSON.stringify(input ?? {});
+  if (text.length <= maxBytes) {
+    return input;
+  }
+
+  const trimmed = {
+    selectedAirport: null,
+    selectedAirspace: null,
+    route: null,
+    weather: input?.weather ?? { metarRaw: null, tafRaw: null },
+    map: input?.map ?? { center: { lat: 0, lng: 0 }, zoom: 0 },
+    contextReduced: true,
+  };
+
+  return trimmed;
+}
+
+function sanitizeAskContext(context) {
+  const selectedAirport = sanitizeUnknown(context?.selectedAirport);
+  const selectedAirspace = sanitizeUnknown(context?.selectedAirspace);
+  const route = sanitizeUnknown(context?.route);
+  const weather = {
+    metarRaw: truncateString(context?.weather?.metarRaw, 1800),
+    tafRaw: truncateString(context?.weather?.tafRaw, 1800),
+  };
+  const map = {
+    center: {
+      lat: Number.isFinite(Number(context?.map?.center?.lat)) ? Number(context.map.center.lat) : 0,
+      lng: Number.isFinite(Number(context?.map?.center?.lng)) ? Number(context.map.center.lng) : 0,
+    },
+    zoom: Number.isFinite(Number(context?.map?.zoom)) ? Number(context.map.zoom) : 0,
+  };
+
+  const sanitized = {
+    selectedAirport,
+    selectedAirspace,
+    route,
+    weather,
+    map,
+  };
+
+  const byteLimited = trimToByteLimit(sanitized, CONTEXT_SIZE_LIMIT_BYTES);
+  const hasSelection = Boolean(
+    byteLimited.selectedAirport
+    || byteLimited.selectedAirspace
+    || byteLimited.route
+    || byteLimited.weather?.metarRaw
+    || byteLimited.weather?.tafRaw
+  );
+
+  return {
+    context: byteLimited,
+    contextEmpty: !hasSelection,
+  };
 }
 
 async function generateStructured(promptFactory, payload, cacheKey) {
@@ -121,6 +285,68 @@ export async function explainAirspace(airspaceData) {
 
   const cacheKey = `airspace:${airspaceId}:${JSON.stringify(airspaceData ?? {})}`;
   return generateStructured(airspacePrompt, airspaceData ?? {}, cacheKey);
+}
+
+export async function askWithContext(question, context) {
+  const sanitizedQuestion = String(question ?? "").trim();
+  const questionLimited = sanitizedQuestion.length > 500 ? sanitizedQuestion.slice(0, 500) : sanitizedQuestion;
+  const { context: sanitizedContext, contextEmpty } = sanitizeAskContext(context ?? {});
+
+  const payload = {
+    question: questionLimited,
+    context: sanitizedContext,
+    contextState: contextEmpty
+      ? "No selected airport/airspace/route/weather was available in the app context."
+      : "Context contains current map selections and route/weather details.",
+  };
+
+  const cacheKey = `context-ask:${JSON.stringify(payload)}`;
+  const cached = getCache(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  if (!openai) {
+    return {
+      answer: "Unable to generate AI explanation.",
+      keyPoints: ["AI service is currently unavailable on this server."],
+      warnings: [CONTEXT_ASK_DISCLAIMER],
+    };
+  }
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const completion = await openai.responses.create({
+        model: MODEL,
+        input: contextAskPrompt(payload, { strictJsonOnly: attempt === 2 }),
+      });
+
+      const rawOutput = completion.output_text ?? "";
+      const candidateJson = extractJsonObject(rawOutput);
+      const parsed = candidateJson ? safeJsonParse(candidateJson) : null;
+      const validated = normalizeContextAskResponse(parsed);
+
+      if (validated) {
+        setCache(cacheKey, validated);
+        return validated;
+      }
+    } catch (error) {
+      lastError = error;
+      break;
+    }
+  }
+
+  if (lastError) {
+    console.error("OpenAI context ask request failed", lastError);
+  }
+
+  return {
+    answer: "Unable to generate AI explanation.",
+    keyPoints: ["Try again in a moment or verify details directly in official briefing tools."],
+    warnings: [CONTEXT_ASK_DISCLAIMER],
+  };
 }
 
 export { FALLBACK_RESPONSE, MODEL };

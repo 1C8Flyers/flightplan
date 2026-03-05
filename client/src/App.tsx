@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
+import { AiDrawer } from './components/AiDrawer'
+import { AiBriefCard } from './components/AiBriefCard'
 import { AirportDiagramsLayer } from './map/AirportDiagramsLayer'
+import { airportBrief, explainAirspace, explainMetar } from './services/aiApi'
+import type { AiAskContext } from './services/aiContextApi'
 
 type BaseMapStyle = 'light' | 'dark'
 
@@ -165,6 +169,8 @@ type AirportNotamsResponse = {
   }>
 }
 
+type AirportNotam = AirportNotamsResponse['notams'][number]
+
 type PrintableDiagram = {
   role: 'Departure' | 'Arrival'
   airportIcao: string
@@ -284,6 +290,19 @@ function toDeg(radians: number) {
 function normalizeHeading(degrees: number) {
   const normalized = degrees % 360
   return normalized < 0 ? normalized + 360 : normalized
+}
+
+function normalizeMetarForAi(rawMetar: string | null | undefined) {
+  if (!rawMetar) {
+    return null
+  }
+
+  const normalized = rawMetar
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+
+  return normalized.length > 0 ? normalized : null
 }
 
 function escapeHtml(value: string) {
@@ -473,6 +492,7 @@ function App() {
   const [selectedMapAirportNotams, setSelectedMapAirportNotams] = useState<AirportNotamsResponse['notams']>([])
   const [selectedMapAirportNotamsLoading, setSelectedMapAirportNotamsLoading] = useState(false)
   const [selectedMapAirportNotamsError, setSelectedMapAirportNotamsError] = useState<string | null>(null)
+  const [selectedMapAirspaceId, setSelectedMapAirspaceId] = useState<string | null>(null)
   const [showFaaCharts, setShowFaaCharts] = useState(true)
   const [showAirportDiagrams, setShowAirportDiagrams] = useState(() => {
     if (typeof window === 'undefined') {
@@ -521,6 +541,7 @@ function App() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
   const [routeInsertDragging, setRouteInsertDragging] = useState(false)
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false)
 
   const recalcRequestIdRef = useRef(0)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
@@ -563,10 +584,56 @@ function App() {
   const trimmedMapAirportSearchQuery = mapAirportSearchQuery.trim()
   const showMapAirportSearchPanel = mapAirportSearchFocused && trimmedMapAirportSearchQuery.length > 0
   const selectedMapAirportIcao = selectedMapAirport?.airport.icao ?? null
+  const selectedMapAirportMetarRaw = selectedMapAirportWeather?.metar?.rawOb?.trim() ?? null
+  const selectedMapAirportMetarForAi = normalizeMetarForAi(selectedMapAirportWeather?.metar?.rawOb)
+  const depMetarForAi = normalizeMetarForAi(depWeather?.metar?.rawOb)
+  const arrMetarForAi = normalizeMetarForAi(arrWeather?.metar?.rawOb)
+  const selectedMapAirportAirspace = useMemo<AirportNotam | null>(
+    () => selectedMapAirportNotams.find((notam) => notam.id === selectedMapAirspaceId) ?? null,
+    [selectedMapAirportNotams, selectedMapAirspaceId]
+  )
   const selectedMapAirportFlightCategory = useMemo(
     () => getFlightCategory(selectedMapAirportWeather),
     [selectedMapAirportWeather]
   )
+
+  function getCurrentAiContext(): AiAskContext {
+    const mapInstance = mapRef.current as {
+      getCenter?: () => { lat: number; lng: number }
+      getZoom?: () => number
+    } | null
+
+    const center = mapInstance?.getCenter?.()
+    const zoom = mapInstance?.getZoom?.()
+    const defaultLat = selectedMapAirport?.airport.lat ?? userLocation?.lat ?? 39.5
+    const defaultLng = selectedMapAirport?.airport.lon ?? userLocation?.lon ?? -98.35
+
+    const routeContext = routePoints.length >= 2
+      ? {
+          from: routePoints[0]?.ident ?? null,
+          to: routePoints[routePoints.length - 1]?.ident ?? null,
+          pointCount: routePoints.length,
+          distanceNm: Number(totals.totalDistance.toFixed(1))
+        }
+      : null
+
+    return {
+      selectedAirport: selectedMapAirport as unknown as Record<string, unknown> | null,
+      selectedAirspace: selectedMapAirportAirspace as unknown as Record<string, unknown> | null,
+      route: routeContext,
+      weather: {
+        metarRaw: selectedMapAirportWeather?.metar?.rawOb?.trim() ?? null,
+        tafRaw: selectedMapAirportWeather?.taf?.rawTAF?.trim() ?? null
+      },
+      map: {
+        center: {
+          lat: typeof center?.lat === 'number' ? center.lat : defaultLat,
+          lng: typeof center?.lng === 'number' ? center.lng : defaultLng
+        },
+        zoom: typeof zoom === 'number' ? zoom : 0
+      }
+    }
+  }
 
   function normalizeTelemetryPath(path: string) {
     const [base] = path.split('?')
@@ -864,6 +931,7 @@ function App() {
       setSelectedMapAirportNotams([])
       setSelectedMapAirportNotamsLoading(false)
       setSelectedMapAirportNotamsError(null)
+      setSelectedMapAirspaceId(null)
       return
     }
 
@@ -957,6 +1025,17 @@ function App() {
     }
   }, [selectedMapAirportIcao])
 
+  useEffect(() => {
+    if (selectedMapAirportNotams.length === 0) {
+      setSelectedMapAirspaceId(null)
+      return
+    }
+
+    if (!selectedMapAirspaceId || !selectedMapAirportNotams.some((notam) => notam.id === selectedMapAirspaceId)) {
+      setSelectedMapAirspaceId(selectedMapAirportNotams[0].id)
+    }
+  }, [selectedMapAirportNotams, selectedMapAirspaceId])
+
   async function fetchJson<T>(path: string): Promise<T> {
     const startedAt = performance.now()
 
@@ -1021,6 +1100,7 @@ function App() {
     setSelectedMapAirportDistanceNm(null)
     setSelectedMapAirportWeather(null)
     setSelectedMapAirportError(null)
+    setSelectedMapAirspaceId(null)
     setSelectedMapAirportTab('weather')
   }
 
@@ -2596,6 +2676,15 @@ function App() {
           )}
 
           <div className="map-search-overlay" ref={mapSearchContainerRef}>
+            <div className="map-search-actions">
+              <button
+                type="button"
+                className="map-ask-ai-toggle"
+                onClick={() => setAiDrawerOpen((current) => !current)}
+              >
+                Ask AI
+              </button>
+            </div>
             <label className="map-search-box">
               <span className="map-search-icon" aria-hidden="true">⌕</span>
               <input
@@ -2675,6 +2764,12 @@ function App() {
             )}
           </div>
 
+          <AiDrawer
+            isOpen={aiDrawerOpen}
+            onClose={() => setAiDrawerOpen(false)}
+            context={getCurrentAiContext()}
+          />
+
           {(selectedMapAirport || selectedMapAirportError) && (
             <div className="map-airport-info-overlay">
               {selectedMapAirport && (
@@ -2721,8 +2816,16 @@ function App() {
                             {selectedMapAirportWeather.fallbackUsed ? ' (nearest reporting station)' : ''}
                           </p>
                         )}
-                        {selectedMapAirportWeather?.metar?.rawOb && <p>METAR: {selectedMapAirportWeather.metar.rawOb}</p>}
+                        {selectedMapAirportMetarRaw && <p>METAR: {selectedMapAirportMetarRaw}</p>}
                         {selectedMapAirportWeather?.taf?.rawTAF && <p>TAF: {selectedMapAirportWeather.taf.rawTAF}</p>}
+                        {selectedMapAirportMetarForAi && (
+                          <AiBriefCard
+                            title="AI Brief"
+                            actionLabel="Explain this METAR"
+                            cacheKey={`metar:${selectedMapAirportMetarForAi}`}
+                            onGenerate={() => explainMetar(selectedMapAirportMetarForAi)}
+                          />
+                        )}
                       </>
                     )}
 
@@ -2743,6 +2846,12 @@ function App() {
                           ICAO/IATA/FAA: {selectedMapAirport.airport.icao} / {selectedMapAirport.airport.iata ?? '—'} / {selectedMapAirport.airport.faa ?? '—'}
                         </p>
                         {selectedMapAirportDistanceNm != null && <p>Distance from click: {selectedMapAirportDistanceNm.toFixed(1)} NM</p>}
+                        <AiBriefCard
+                          title="AI Brief"
+                          actionLabel="AI airport brief"
+                          cacheKey={`airport:${selectedMapAirport.airport.icao}`}
+                          onGenerate={() => airportBrief(selectedMapAirport)}
+                        />
                       </>
                     )}
 
@@ -2869,16 +2978,33 @@ function App() {
                         {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportNotams.length > 0 && (
                           <ul className="map-airport-info-list">
                             {selectedMapAirportNotams.map((notam) => (
-                              <li key={notam.id}>
-                                <strong>{notam.type} · {notam.id}</strong>
-                                <span>{notam.title}</span>
-                                <span>
-                                  {notam.distanceNm == null ? 'Distance n/a' : `${notam.distanceNm.toFixed(1)} NM`}
-                                  {notam.lastUpdated ? ` · Updated ${new Date(notam.lastUpdated).toLocaleString()}` : ''}
-                                </span>
+                              <li key={notam.id} className={selectedMapAirspaceId === notam.id ? 'map-airspace-list-item-active' : undefined}>
+                                <button
+                                  type="button"
+                                  className="map-airspace-select"
+                                  onClick={() => setSelectedMapAirspaceId(notam.id)}
+                                >
+                                  <strong>{notam.type} · {notam.id}</strong>
+                                  <span>{notam.title}</span>
+                                  <span>
+                                    {notam.distanceNm == null ? 'Distance n/a' : `${notam.distanceNm.toFixed(1)} NM`}
+                                    {notam.lastUpdated ? ` · Updated ${new Date(notam.lastUpdated).toLocaleString()}` : ''}
+                                  </span>
+                                </button>
                               </li>
                             ))}
                           </ul>
+                        )}
+                        {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportAirspace && (
+                          <div className="map-airspace-brief">
+                            <p className="map-airport-info-note">Selected airspace: {selectedMapAirportAirspace.type} {selectedMapAirportAirspace.id}</p>
+                            <AiBriefCard
+                              title="AI Brief"
+                              actionLabel="Explain this airspace"
+                              cacheKey={`airspace:${selectedMapAirportAirspace.id}`}
+                              onGenerate={() => explainAirspace(selectedMapAirportAirspace)}
+                            />
+                          </div>
                         )}
                         <p className="map-airport-info-note">Source: FAA TFR feed near selected airport.</p>
                       </>
@@ -3335,6 +3461,14 @@ function App() {
               <p><strong>Decoded:</strong> {formatDecodedWeather(depWeather)}</p>
               {showRawWeather && <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>}
+              {depMetarForAi && (
+                <AiBriefCard
+                  title="AI Brief"
+                  actionLabel="Explain this METAR"
+                  cacheKey={`metar:${depMetarForAi}`}
+                  onGenerate={() => explainMetar(depMetarForAi)}
+                />
+              )}
             </article>
             <article>
               <h3>{arrival.toUpperCase()}</h3>
@@ -3342,6 +3476,14 @@ function App() {
               <p><strong>Decoded:</strong> {formatDecodedWeather(arrWeather)}</p>
               {showRawWeather && <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>}
+              {arrMetarForAi && (
+                <AiBriefCard
+                  title="AI Brief"
+                  actionLabel="Explain this METAR"
+                  cacheKey={`metar:${arrMetarForAi}`}
+                  onGenerate={() => explainMetar(arrMetarForAi)}
+                />
+              )}
             </article>
           </div>
         </section>

@@ -36,3 +36,26 @@ export function airspacePrompt(data) {
     `Airspace data: ${serialized}`,
   ].join("\n\n");
 }
+
+export function contextAskPrompt(payload, options = {}) {
+  const { strictJsonOnly = false } = options;
+  const serialized = JSON.stringify(payload ?? {}, null, 2);
+
+  return [
+    jsonInstruction('{"answer":"string","keyPoints":["string"],"warnings":["string"]}'),
+    strictJsonOnly
+      ? "CRITICAL: Return JSON only. No prose before or after."
+      : "Return compact JSON only.",
+    "Role: You are a flight planning assistant. Explain available app context for pilots, but do not replace official briefing or pilot judgment.",
+    "Task:",
+    "- Answer succinctly in pilot-friendly language.",
+    "- Provide 3 to 7 keyPoints.",
+    "- Provide warnings only when relevant (e.g., winds, ceiling/visibility, airspace communications/requirements, routing uncertainty).",
+    "- If user asks for data not present (e.g., NOTAM specifics, winds aloft details), explicitly say what is missing and where to get it.",
+    "Output constraints:",
+    "- Must be valid JSON matching schema exactly.",
+    "- keyPoints and warnings must be arrays of strings.",
+    "- If uncertain, be explicit and conservative.",
+    `Question + Context JSON: ${serialized}`,
+  ].join("\n\n");
+}
