@@ -153,20 +153,6 @@ details > summary {
   background: #dfe7f7;
 }
 
-.charts-launch-link {
-  display: inline-block;
-  padding: 0.5rem 0.8rem;
-  border-radius: 8px;
-  background: #0d47a1;
-  color: #fff;
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.charts-launch-link:hover {
-  background: #0b3b86;
-}
-
 .review-checklist {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

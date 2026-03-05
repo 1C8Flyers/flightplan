@@ -27,6 +27,12 @@
   gap: 0.6rem;
 }
 
+.charts-toolbar-selectors {
+  display: flex;
+  align-items: end;
+  gap: 0.65rem;
+}
+
 .charts-link-button {
   padding: 0.35rem 0.65rem;
   border-radius: 6px;
@@ -46,7 +52,7 @@
 }
 
 .charts-layer-select select {
-  min-width: 220px;
+  min-width: 170px;
 }
 
 .charts-mouse-position {
@@ -330,6 +336,11 @@
 
   .charts-layer-select select {
     min-width: 0;
+  }
+
+  .charts-toolbar-selectors {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .charts-search-box input {

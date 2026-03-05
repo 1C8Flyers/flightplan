@@ -47,15 +47,6 @@ npm run dev
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:4000`
 
-### FAA Charts Map Route
-
-- Open `http://localhost:5173/charts` for seamless FAA chart tile browsing.
-- Layer selector includes:
-	- VFR Sectional
-	- Terminal Area Chart (TAC)
-	- IFR Low Enroute
-- Selected layer is persisted in local storage.
-
 ### Environment Variables Required
 
 Create `client/.env.local`:

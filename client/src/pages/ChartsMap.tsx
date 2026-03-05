@@ -4,15 +4,52 @@ import 'leaflet/dist/leaflet.css'
 import '../styles/ChartsMap.css'
 import { defaultFaaChartLayerId, faaCharts } from '../config/faaCharts'
 
-const storageKey = 'navlog:charts:selected-layer'
+type BaseMapStyle = 'light' | 'dark'
+
+type BaseMapLayer = {
+  id: BaseMapStyle
+  name: string
+  tileUrl: string
+  attribution: string
+  maxZoom: number
+}
+
+const selectedLayerStorageKey = 'navlog:charts:selected-layer'
+const selectedBaseMapStorageKey = 'navlog:charts:selected-basemap'
+
+const baseMapLayers: BaseMapLayer[] = [
+  {
+    id: 'light',
+    name: 'Light',
+    tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+  },
+  {
+    id: 'dark',
+    name: 'Dark',
+    tileUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© OpenStreetMap contributors © CARTO',
+    maxZoom: 20
+  }
+]
 
 function getInitialLayerId() {
-  const saved = window.localStorage.getItem(storageKey)
+  const saved = window.localStorage.getItem(selectedLayerStorageKey)
   if (saved && faaCharts.some((layer) => layer.id === saved)) {
     return saved
   }
 
   return defaultFaaChartLayerId
+}
+
+function getInitialBaseMapId(): BaseMapStyle {
+  const saved = window.localStorage.getItem(selectedBaseMapStorageKey)
+  if (saved === 'light' || saved === 'dark') {
+    return saved
+  }
+
+  return 'light'
 }
 
 function navigate(path: string) {
@@ -200,10 +237,12 @@ export default function ChartsMap() {
   const mapHostRef = useRef<HTMLDivElement | null>(null)
   const searchContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<LeafletMap | null>(null)
+  const baseTileLayerRef = useRef<Layer | null>(null)
   const activeTileLayerRef = useRef<Layer | null>(null)
   const searchMarkerRef = useRef<Layer | null>(null)
 
   const [selectedLayerId, setSelectedLayerId] = useState<string>(getInitialLayerId)
+  const [selectedBaseMapId, setSelectedBaseMapId] = useState<BaseMapStyle>(getInitialBaseMapId)
   const [appliedLayerId, setAppliedLayerId] = useState<string>(getInitialLayerId)
   const [mapReady, setMapReady] = useState(false)
   const [layerError, setLayerError] = useState<string | null>(null)
@@ -228,6 +267,10 @@ export default function ChartsMap() {
     () => faaCharts.find((layer) => layer.id === appliedLayerId) ?? faaCharts[0],
     [appliedLayerId]
   )
+  const selectedBaseMap = useMemo(
+    () => baseMapLayers.find((baseMap) => baseMap.id === selectedBaseMapId) ?? baseMapLayers[0],
+    [selectedBaseMapId]
+  )
   const trimmedSearchQuery = searchQuery.trim()
   const showSearchPanel = searchFocused || Boolean(trimmedSearchQuery)
   const selectedAirportFlightCondition = useMemo(
@@ -236,8 +279,12 @@ export default function ChartsMap() {
   )
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, selectedLayer.id)
+    window.localStorage.setItem(selectedLayerStorageKey, selectedLayer.id)
   }, [selectedLayer.id])
+
+  useEffect(() => {
+    window.localStorage.setItem(selectedBaseMapStorageKey, selectedBaseMap.id)
+  }, [selectedBaseMap.id])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -421,6 +468,45 @@ export default function ChartsMap() {
   useEffect(() => {
     let disposed = false
 
+    async function applyBaseLayer() {
+      if (!mapReady || !mapRef.current) {
+        return
+      }
+
+      const leaflet = await import('leaflet')
+      if (disposed || !mapRef.current) {
+        return
+      }
+
+      const map = mapRef.current
+      if (baseTileLayerRef.current) {
+        map.removeLayer(baseTileLayerRef.current)
+      }
+
+      const baseTileLayer = leaflet.tileLayer(selectedBaseMap.tileUrl, {
+        minZoom: appliedLayer.minZoom,
+        maxZoom: Math.max(appliedLayer.maxZoom, selectedBaseMap.maxZoom),
+        attribution: selectedBaseMap.attribution,
+        detectRetina: true
+      })
+
+      baseTileLayer.addTo(map)
+      baseTileLayer.setZIndex(0)
+      baseTileLayerRef.current = baseTileLayer
+    }
+
+    applyBaseLayer().catch((error) => {
+      setLayerError((error as Error).message || 'Base map tiles unavailable.')
+    })
+
+    return () => {
+      disposed = true
+    }
+  }, [mapReady, selectedBaseMap, appliedLayer.minZoom, appliedLayer.maxZoom])
+
+  useEffect(() => {
+    let disposed = false
+
     async function applyLayer() {
       if (!mapReady || !mapRef.current) {
         return
@@ -514,6 +600,7 @@ export default function ChartsMap() {
       })
 
       blobTileLayer.addTo(map)
+      blobTileLayer.setZIndex(10)
       activeTileLayerRef.current = blobTileLayer
     }
 
@@ -533,6 +620,7 @@ export default function ChartsMap() {
       }
 
       mapRef.current = null
+      baseTileLayerRef.current = null
       activeTileLayerRef.current = null
       searchMarkerRef.current = null
       setMapReady(false)
@@ -603,16 +691,29 @@ export default function ChartsMap() {
           <button type="button" onClick={() => navigate('/')} className="charts-link-button">Back to Planner</button>
         </div>
 
-        <label className="charts-layer-select">
-          Layer
-          <select value={selectedLayer.id} onChange={(event) => setSelectedLayerId(event.target.value)}>
-            {faaCharts.map((layer) => (
-              <option key={layer.id} value={layer.id}>
-                {layer.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="charts-toolbar-selectors">
+          <label className="charts-layer-select">
+            Chart Layer
+            <select value={selectedLayer.id} onChange={(event) => setSelectedLayerId(event.target.value)}>
+              {faaCharts.map((layer) => (
+                <option key={layer.id} value={layer.id}>
+                  {layer.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="charts-layer-select">
+            Basemap
+            <select value={selectedBaseMap.id} onChange={(event) => setSelectedBaseMapId(event.target.value as BaseMapStyle)}>
+              {baseMapLayers.map((baseMap) => (
+                <option key={baseMap.id} value={baseMap.id}>
+                  {baseMap.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         <p className="charts-mouse-position">
           {mousePosition ? `${mousePosition.lat.toFixed(4)}, ${mousePosition.lon.toFixed(4)}` : 'Move cursor to view lat/lon'}

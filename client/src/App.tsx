@@ -3,6 +3,33 @@ import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
 
+type BaseMapStyle = 'light' | 'dark'
+
+type BaseMapLayer = {
+  id: BaseMapStyle
+  name: string
+  tileUrl: string
+  attribution: string
+  maxZoom: number
+}
+
+const baseMapLayers: BaseMapLayer[] = [
+  {
+    id: 'light',
+    name: 'Light',
+    tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+  },
+  {
+    id: 'dark',
+    name: 'Dark',
+    tileUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© OpenStreetMap contributors © CARTO',
+    maxZoom: 20
+  }
+]
+
 type AirportResponse = {
   airport: {
     icao: string
@@ -449,6 +476,18 @@ function App() {
 
     return defaultFaaChartLayerId
   })
+  const [planBaseMapId, setPlanBaseMapId] = useState<BaseMapStyle>(() => {
+    if (typeof window === 'undefined') {
+      return 'light'
+    }
+
+    const stored = window.localStorage.getItem('navlog:charts:selected-basemap')
+    if (stored === 'light' || stored === 'dark') {
+      return stored
+    }
+
+    return 'light'
+  })
   const [planMapError, setPlanMapError] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
@@ -458,6 +497,7 @@ function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapSearchContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
+  const baseLayerRef = useRef<any>(null)
   const chartLayerRef = useRef<any>(null)
   const tfrLayerRef = useRef<any>(null)
   const routeLayerRef = useRef<any>(null)
@@ -481,6 +521,10 @@ function App() {
     () => faaCharts.find((layer) => layer.id === planLayerId) ?? faaCharts[0],
     [planLayerId]
   )
+  const selectedBaseMap = useMemo(
+    () => baseMapLayers.find((baseMap) => baseMap.id === planBaseMapId) ?? baseMapLayers[0],
+    [planBaseMapId]
+  )
   const trimmedMapAirportSearchQuery = mapAirportSearchQuery.trim()
   const showMapAirportSearchPanel = mapAirportSearchFocused && trimmedMapAirportSearchQuery.length > 0
   const selectedMapAirportIcao = selectedMapAirport?.airport.icao ?? null
@@ -494,6 +538,12 @@ function App() {
       window.localStorage.setItem('navlog:charts:selected-layer', planLayerId)
     }
   }, [planLayerId])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('navlog:charts:selected-basemap', planBaseMapId)
+    }
+  }, [planBaseMapId])
 
   useEffect(() => {
     let cancelled = false
@@ -1752,6 +1802,8 @@ function App() {
 
       const map = mapRef.current
       map.invalidateSize()
+      map.setMinZoom(selectedPlanLayer.minZoom)
+      map.setMaxZoom(selectedPlanLayer.maxZoom)
 
       let switchedToFallbackLayer = false
 
@@ -1765,16 +1817,15 @@ function App() {
           chartLayerRef.current = null
         }
 
-        const fallbackLayer = leaflet.tileLayer(
-          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          {
-            minZoom: selectedPlanLayer.minZoom,
-            maxZoom: selectedPlanLayer.maxZoom,
-            attribution: '© OpenStreetMap contributors'
-          }
-        )
+        const fallbackLayer = leaflet.tileLayer(selectedBaseMap.tileUrl, {
+          minZoom: selectedPlanLayer.minZoom,
+          maxZoom: Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom),
+          attribution: selectedBaseMap.attribution,
+          detectRetina: true
+        })
 
         fallbackLayer.addTo(map)
+        fallbackLayer.setZIndex(0)
         chartLayerRef.current = fallbackLayer
 
         if (message) {
@@ -1786,8 +1837,23 @@ function App() {
         map.removeLayer(chartLayerRef.current)
       }
 
+      if (baseLayerRef.current) {
+        map.removeLayer(baseLayerRef.current)
+      }
+
+      const baseLayer = leaflet.tileLayer(selectedBaseMap.tileUrl, {
+        minZoom: selectedPlanLayer.minZoom,
+        maxZoom: Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom),
+        attribution: selectedBaseMap.attribution,
+        detectRetina: true
+      })
+
+      baseLayer.addTo(map)
+      baseLayer.setZIndex(0)
+      baseLayerRef.current = baseLayer
+
       if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
-        applyFallbackTileLayer('FAA chart tiles unavailable. Showing fallback base map.')
+        applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
         return
       }
 
@@ -1844,11 +1910,12 @@ function App() {
       tileLayer.on('tileerror', () => {
         if (!switchedToFallbackLayer) {
           switchedToFallbackLayer = true
-          applyFallbackTileLayer('FAA chart tiles unavailable. Showing fallback base map.')
+          applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
         }
       })
 
       tileLayer.addTo(map)
+      tileLayer.setZIndex(10)
       chartLayerRef.current = tileLayer
 
       if (tfrLayerRef.current) {
@@ -2170,7 +2237,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [routePoints, selectedPlanLayer, showTfrOverlay, userLocation])
+  }, [routePoints, selectedPlanLayer, selectedBaseMap, showTfrOverlay, userLocation])
 
   useEffect(() => {
     return () => {
@@ -2179,6 +2246,7 @@ function App() {
       }
 
       mapRef.current = null
+      baseLayerRef.current = null
       chartLayerRef.current = null
       tfrLayerRef.current = null
       routeLayerRef.current = null
@@ -2529,6 +2597,17 @@ function App() {
               <select value={planLayerId} onChange={(event) => setPlanLayerId(event.target.value)}>
                 {faaCharts.map((layer) => (
                   <option key={layer.id} value={layer.id}>{layer.name}</option>
+                ))}
+              </select>
+            </label>
+            </div>
+
+            <div className="map-flight-section">
+            <label>
+              🌗 Basemap
+              <select value={planBaseMapId} onChange={(event) => setPlanBaseMapId(event.target.value as BaseMapStyle)}>
+                {baseMapLayers.map((baseMap) => (
+                  <option key={baseMap.id} value={baseMap.id}>{baseMap.name}</option>
                 ))}
               </select>
             </label>
