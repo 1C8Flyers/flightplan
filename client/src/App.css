@@ -234,8 +234,12 @@ button:disabled {
   box-shadow: 0 0 0 2px rgba(13, 71, 161, 0.18);
 }
 
-.waypoint-chip-draggable.drop-target {
-  transform: translateX(20px);
+.waypoint-chip-draggable.drop-before {
+  box-shadow: inset 3px 0 0 0 rgba(13, 71, 161, 0.7), 0 0 0 2px rgba(13, 71, 161, 0.18);
+}
+
+.waypoint-chip-draggable.drop-after {
+  box-shadow: inset -3px 0 0 0 rgba(13, 71, 161, 0.7), 0 0 0 2px rgba(13, 71, 161, 0.18);
 }
 
 .waypoint-chip-draggable:active,

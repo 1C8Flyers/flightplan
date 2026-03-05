@@ -14,6 +14,9 @@ type AirportRecord = {
   name: string
   lat: number
   lon: number
+  localCode?: string | null
+  iataCode?: string | null
+  gpsCode?: string | null
 }
 
 export type RunwayGeom = {
@@ -527,7 +530,20 @@ export function registerDiagramRoutes(app: Express, deps: DiagramDeps) {
         deps.fetchRunwaysDataset()
       ])
 
-      const airport = airports.find((candidate) => candidate.ident === ident)
+      const idCandidates = [ident, ident.replace(/^K/, '')]
+      const airport = airports.find((candidate) => {
+        const airportCodes = [
+          candidate.ident,
+          candidate.localCode ?? null,
+          candidate.iataCode ?? null,
+          candidate.gpsCode ?? null
+        ]
+          .filter(Boolean)
+          .map((value) => String(value).toUpperCase())
+
+        return idCandidates.some((value) => airportCodes.includes(value))
+      })
+
       if (!airport) {
         res.status(404).json({ error: `Airport not found: ${ident}` })
         return

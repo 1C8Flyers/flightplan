@@ -197,6 +197,11 @@ type LandmarkResult = {
 
 const landmarkCache = new Map<string, { loadedAt: number; result: LandmarkResult }>()
 const airportDiagramCache = new Map<string, { loadedAt: number; diagram: AirportDiagram | null }>()
+const airportDiagramCacheHitTtlMs = 12 * 60 * 60 * 1000
+const airportDiagramCacheMissTtlMs = 2 * 60 * 1000
+const dtppMetafileCacheTtlMs = 6 * 60 * 60 * 1000
+let dtppMetafileCache: { loadedAt: number; cycle: string; byCode: Map<string, AirportDiagram> } | null = null
+let dtppCycleCache: { loadedAt: number; cycle: string } | null = null
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers: { Accept: 'application/json' } })
@@ -1396,44 +1401,44 @@ async function findNearbyFaaWaypoint(lat: number, lon: number) {
 
 async function fetchAirportDiagram(icaoCode: string) {
   const normalized = icaoCode.toUpperCase().trim()
-  const cacheWindowMs = 12 * 60 * 60 * 1000
   const cached = airportDiagramCache.get(normalized)
-  if (cached && Date.now() - cached.loadedAt < cacheWindowMs) {
-    return cached.diagram
+  if (cached) {
+    const cacheWindowMs = cached.diagram ? airportDiagramCacheHitTtlMs : airportDiagramCacheMissTtlMs
+    if (Date.now() - cached.loadedAt < cacheWindowMs) {
+      return cached.diagram
+    }
   }
 
   const resolved = await resolveAirport(normalized)
   const candidates = [
     resolved.station?.icaoId,
+    resolved.station?.faaId,
+    resolved.station?.iataId,
+    resolved.station?.icaoId?.replace(/^K/, ''),
     resolved.dataset?.gpsCode,
+    resolved.dataset?.localCode,
+    resolved.dataset?.iataCode,
     resolved.dataset?.ident,
     resolved.inputCode
   ]
     .filter(Boolean)
     .map((value) => String(value).toUpperCase())
 
+  const uniqueCandidates = [...new Set(candidates)]
+  const dtppDiagramsByCode = await fetchDtppAirportDiagramsByCode()
+
   let selected: AirportDiagram | null = null
-
-  for (const candidate of candidates) {
-    const payload = await fetchJson<Record<string, Array<{
-      chart_code?: string
-      chart_name?: string
-      pdf_path?: string
-      icao_ident?: string
-      faa_ident?: string
-    }>>>(`https://api.aviationapi.com/v1/charts?apt=${candidate}&group=2`)
-
-    const rows = payload[candidate] ?? []
-    const diagram = rows.find((row) => row.chart_code === 'APD' && row.pdf_path)
-    if (!diagram?.pdf_path) {
+  for (const candidate of uniqueCandidates) {
+    const diagram = dtppDiagramsByCode.get(candidate)
+    if (!diagram) {
       continue
     }
 
     selected = {
-      icao: (diagram.icao_ident ?? candidate).toUpperCase(),
-      faa: diagram.faa_ident?.toUpperCase() ?? resolved.station?.faaId?.toUpperCase() ?? null,
-      chartName: diagram.chart_name ?? 'Airport Diagram',
-      pdfUrl: diagram.pdf_path
+      icao: (diagram.icao || resolved.station?.icaoId || resolved.dataset?.gpsCode || candidate).toUpperCase(),
+      faa: diagram.faa ?? resolved.station?.faaId?.toUpperCase() ?? resolved.dataset?.localCode?.toUpperCase() ?? null,
+      chartName: diagram.chartName || 'AIRPORT DIAGRAM',
+      pdfUrl: diagram.pdfUrl
     }
     break
   }
@@ -1444,6 +1449,173 @@ async function fetchAirportDiagram(icaoCode: string) {
   })
 
   return selected
+}
+
+function toDtppCycle(effectiveDate: string) {
+  const match = effectiveDate.match(/^(\d{4})-(\d{2})-\d{2}$/)
+  if (!match) {
+    throw new Error(`Invalid NASR effective date format: ${effectiveDate}`)
+  }
+
+  const [, year, month] = match
+  return `${year.slice(2)}${month}`
+}
+
+function asArray<T>(value: T | T[] | null | undefined): T[] {
+  if (Array.isArray(value)) {
+    return value
+  }
+
+  return value == null ? [] : [value]
+}
+
+function registerAirportDiagramCandidate(index: Map<string, AirportDiagram>, code: string | null | undefined, diagram: AirportDiagram) {
+  const normalized = String(code ?? '').trim().toUpperCase()
+  if (!normalized || index.has(normalized)) {
+    return
+  }
+
+  index.set(normalized, diagram)
+}
+
+function xmlFirstText(value: unknown) {
+  if (Array.isArray(value)) {
+    return String(value[0] ?? '')
+  }
+
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
+}
+
+function collectAirportDiagramCandidatesFromMetafile(
+  node: unknown,
+  dtppCycle: string,
+  byCode: Map<string, AirportDiagram>
+) {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectAirportDiagramCandidatesFromMetafile(item, dtppCycle, byCode)
+    }
+    return
+  }
+
+  if (!node || typeof node !== 'object') {
+    return
+  }
+
+  const objectNode = node as Record<string, unknown>
+  const airportNodes = asArray(objectNode.airport_name)
+  for (const airportNodeRaw of airportNodes) {
+    if (!airportNodeRaw || typeof airportNodeRaw !== 'object') {
+      continue
+    }
+
+    const airportNode = airportNodeRaw as Record<string, unknown>
+    const airportAttrs = (airportNode.$ as Record<string, unknown> | undefined) ?? {}
+    const aptIdent = String(airportAttrs.apt_ident ?? '').trim().toUpperCase()
+    const icaoIdent = String(airportAttrs.icao_ident ?? '').trim().toUpperCase()
+    const airportName = String(airportAttrs.ID ?? '').trim()
+
+    const records = asArray(airportNode.record)
+    const diagramRecordRaw = records.find((record) => {
+      if (!record || typeof record !== 'object') {
+        return false
+      }
+
+      const recordObject = record as Record<string, unknown>
+      const chartCode = xmlFirstText(recordObject.chart_code).toUpperCase()
+      const pdfName = xmlFirstText(recordObject.pdf_name).trim()
+      return chartCode === 'APD' && Boolean(pdfName)
+    }) as Record<string, unknown> | undefined
+
+    if (!diagramRecordRaw) {
+      continue
+    }
+
+    const pdfName = xmlFirstText(diagramRecordRaw.pdf_name).trim()
+    if (!pdfName) {
+      continue
+    }
+
+    const chartName = xmlFirstText(diagramRecordRaw.chart_name).trim() || 'AIRPORT DIAGRAM'
+    const diagram: AirportDiagram = {
+      icao: icaoIdent || aptIdent,
+      faa: aptIdent || null,
+      chartName,
+      pdfUrl: `https://aeronav.faa.gov/d-tpp/${dtppCycle}/${encodeURIComponent(pdfName)}`
+    }
+
+    registerAirportDiagramCandidate(byCode, aptIdent, diagram)
+    registerAirportDiagramCandidate(byCode, icaoIdent, diagram)
+    registerAirportDiagramCandidate(byCode, airportName, diagram)
+
+    if (icaoIdent.startsWith('K') && icaoIdent.length === 4) {
+      registerAirportDiagramCandidate(byCode, icaoIdent.slice(1), diagram)
+    }
+  }
+
+  for (const value of Object.values(objectNode)) {
+    if (value && typeof value === 'object') {
+      collectAirportDiagramCandidatesFromMetafile(value, dtppCycle, byCode)
+    }
+  }
+}
+
+async function fetchDtppAirportDiagramsByCode() {
+  const dtppCycle = await fetchCurrentDtppCycle()
+
+  if (
+    dtppMetafileCache
+    && dtppMetafileCache.cycle === dtppCycle
+    && Date.now() - dtppMetafileCache.loadedAt < dtppMetafileCacheTtlMs
+  ) {
+    return dtppMetafileCache.byCode
+  }
+
+  const metadataUrl = `https://aeronav.faa.gov/d-tpp/${dtppCycle}/xml_data/d-tpp_Metafile.xml`
+  const response = await fetch(metadataUrl)
+  if (!response.ok) {
+    throw new Error(`FAA d-TPP metadata request failed (${response.status})`)
+  }
+
+  const xmlBody = await response.text()
+  const parsed = await parseStringPromise(xmlBody)
+
+  const byCode = new Map<string, AirportDiagram>()
+  collectAirportDiagramCandidatesFromMetafile(parsed, dtppCycle, byCode)
+
+  dtppMetafileCache = {
+    loadedAt: Date.now(),
+    cycle: dtppCycle,
+    byCode
+  }
+
+  return byCode
+}
+
+async function fetchCurrentDtppCycle() {
+  if (dtppCycleCache && Date.now() - dtppCycleCache.loadedAt < dtppMetafileCacheTtlMs) {
+    return dtppCycleCache.cycle
+  }
+
+  const response = await fetch('https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/dtpp/search/')
+  if (!response.ok) {
+    throw new Error(`FAA d-TPP search page request failed (${response.status})`)
+  }
+
+  const html = await response.text()
+  const matches = [...html.matchAll(/https:\/\/aeronav\.faa\.gov\/d-tpp\/(\d{4})\/xml_data\/d-tpp_Metafile\.xml/gi)]
+  const cycle = matches[0]?.[1]
+
+  if (!cycle) {
+    throw new Error('Unable to determine current FAA d-TPP cycle from search page.')
+  }
+
+  dtppCycleCache = {
+    loadedAt: Date.now(),
+    cycle
+  }
+
+  return cycle
 }
 
 function toMorsePattern(value: string) {
@@ -2219,7 +2391,7 @@ app.get('/api/airport-diagram/by-airport/:icao', async (req, res) => {
 app.get('/api/airport-diagram/pdf', async (req, res) => {
   try {
     const source = String(req.query.source ?? '')
-    if (!source.startsWith('https://charts.aviationapi.com/')) {
+    if (!source.startsWith('https://aeronav.faa.gov/d-tpp/')) {
       res.status(400).json({ error: 'Invalid airport diagram source URL.' })
       return
     }

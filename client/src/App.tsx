@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
@@ -417,7 +417,7 @@ function App() {
   const [waypointDraft, setWaypointDraft] = useState('')
   const [waypointChips, setWaypointChips] = useState<WaypointChip[]>([])
   const [draggingWaypointIndex, setDraggingWaypointIndex] = useState<number | null>(null)
-  const [dragOverWaypointIndex, setDragOverWaypointIndex] = useState<number | null>(null)
+  const [dragWaypointInsertionIndex, setDragWaypointInsertionIndex] = useState<number | null>(null)
   const [cruiseAltitudeFt, setCruiseAltitudeFt] = useState(3000)
   const [tas, setTas] = useState(110)
   const [compassDeviation, setCompassDeviation] = useState(0)
@@ -517,7 +517,7 @@ function App() {
   const [planMapError, setPlanMapError] = useState<string | null>(null)
   const [mapInitializing, setMapInitializing] = useState(true)
   const [mapTilesLoading, setMapTilesLoading] = useState(false)
-  const [loadTelemetry, setLoadTelemetry] = useState<LoadTelemetryEntry[]>([])
+  const [, setLoadTelemetry] = useState<LoadTelemetryEntry[]>([])
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
   const [routeInsertDragging, setRouteInsertDragging] = useState(false)
@@ -1009,7 +1009,7 @@ function App() {
     setMapAirportSearchFocused(false)
 
     if (mapRef.current) {
-      mapRef.current.setView([airport.lat, airport.lon], Math.max(mapRef.current.getZoom(), 9))
+      mapRef.current.panTo([airport.lat, airport.lon])
     }
 
     await selectMapAirportFromIdent(airport.ident)
@@ -1220,39 +1220,119 @@ function App() {
     setWaypointLines(waypointLines.filter((_line, lineIndex) => lineIndex !== index))
   }
 
-  function reorderWaypointChips(targetIndex: number) {
-    if (draggingWaypointIndex == null || draggingWaypointIndex === targetIndex) {
-      setDraggingWaypointIndex(null)
-      setDragOverWaypointIndex(null)
+  function clearWaypointDragState() {
+    setDraggingWaypointIndex(null)
+    setDragWaypointInsertionIndex(null)
+  }
+
+  function reorderWaypointChips(insertionSlot: number) {
+    if (draggingWaypointIndex == null) {
+      clearWaypointDragState()
+      return
+    }
+
+    const normalizedInsertionSlot = Math.max(0, Math.min(insertionSlot, waypointLines.length))
+    if (normalizedInsertionSlot === draggingWaypointIndex || normalizedInsertionSlot === draggingWaypointIndex + 1) {
+      clearWaypointDragState()
+      return
+    }
+
+    const insertionIndexAfterRemove = normalizedInsertionSlot > draggingWaypointIndex
+      ? normalizedInsertionSlot - 1
+      : normalizedInsertionSlot
+
+    if (insertionIndexAfterRemove < 0 || insertionIndexAfterRemove > waypointLines.length - 1) {
+      clearWaypointDragState()
       return
     }
 
     const nextLines = [...waypointLines]
     const [dragged] = nextLines.splice(draggingWaypointIndex, 1)
     if (dragged == null) {
-      setDraggingWaypointIndex(null)
-      setDragOverWaypointIndex(null)
+      clearWaypointDragState()
       return
     }
 
-    const insertionIndex = draggingWaypointIndex < targetIndex ? targetIndex - 1 : targetIndex
-    nextLines.splice(Math.max(0, insertionIndex), 0, dragged)
-    setDraggingWaypointIndex(null)
-    setDragOverWaypointIndex(null)
+    nextLines.splice(insertionIndexAfterRemove, 0, dragged)
+    clearWaypointDragState()
     setWaypointLines(nextLines)
   }
 
-  function updateTouchDragTarget(clientX: number, clientY: number) {
+  function getWaypointInsertionSlot(chipElement: HTMLElement, clientX: number) {
+    const index = Number(chipElement.dataset.waypointChipIndex)
+    if (Number.isNaN(index)) {
+      return null
+    }
+
+    const bounds = chipElement.getBoundingClientRect()
+    const midpointX = bounds.left + (bounds.width / 2)
+    return clientX >= midpointX ? index + 1 : index
+  }
+
+  function updateWaypointDragTarget(clientX: number, clientY: number) {
     const target = document.elementFromPoint(clientX, clientY)
-    const chipElement = target instanceof HTMLElement ? target.closest('[data-waypoint-chip-index]') : null
-    if (!chipElement || !(chipElement instanceof HTMLElement)) {
+    if (!(target instanceof HTMLElement)) {
       return
     }
 
-    const index = Number(chipElement.dataset.waypointChipIndex)
-    if (!Number.isNaN(index)) {
-      setDragOverWaypointIndex(index)
+    const chipElement = target.closest('[data-waypoint-chip-index]')
+    if (!chipElement || !(chipElement instanceof HTMLElement)) {
+      setDragWaypointInsertionIndex(waypointChips.length)
+      return
     }
+
+    const slot = getWaypointInsertionSlot(chipElement, clientX)
+    if (slot != null) {
+      setDragWaypointInsertionIndex(slot)
+    }
+  }
+
+  function handleWaypointChipDragOver(index: number, event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+
+    const slot = getWaypointInsertionSlot(event.currentTarget, event.clientX)
+    if (slot != null) {
+      setDragWaypointInsertionIndex(slot)
+      return
+    }
+
+    setDragWaypointInsertionIndex(index)
+  }
+
+  function handleWaypointChipDrop(index: number, event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+
+    const slot = getWaypointInsertionSlot(event.currentTarget, event.clientX)
+    reorderWaypointChips(slot ?? index)
+  }
+
+  function handleWaypointListDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+
+    if (draggingWaypointIndex == null) {
+      return
+    }
+
+    const target = event.target
+    if (target instanceof HTMLElement && target.closest('[data-waypoint-chip-index]')) {
+      return
+    }
+
+    setDragWaypointInsertionIndex(waypointChips.length)
+  }
+
+  function handleWaypointListDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+
+    if (draggingWaypointIndex == null) {
+      return
+    }
+
+    reorderWaypointChips(dragWaypointInsertionIndex ?? waypointChips.length)
+  }
+
+  function updateTouchDragTarget(clientX: number, clientY: number) {
+    updateWaypointDragTarget(clientX, clientY)
   }
 
   function toWaypointInputFromRoute(points: Point[]) {
@@ -1872,8 +1952,13 @@ function App() {
         lastMapTileLoadKeyRef.current = mapTileLoadKey
       }
 
+      const isRetinaDisplay = typeof window !== 'undefined' && window.devicePixelRatio > 1
+      const faaMaxInteractiveZoom = Math.max(
+        selectedPlanLayer.minZoom,
+        selectedPlanLayer.maxZoom - (isRetinaDisplay ? 1 : 0)
+      )
       const maxInteractiveZoom = showFaaCharts
-        ? selectedPlanLayer.maxZoom
+        ? faaMaxInteractiveZoom
         : Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom)
 
       setPlanMapError(null)
@@ -1968,8 +2053,6 @@ function App() {
         airportDiagramsLayerRef.current.refreshNow()
       }
 
-      let switchedToFallbackLayer = false
-
       function applyFallbackTileLayer(message?: string) {
         if (!mapRef.current) {
           return
@@ -2031,6 +2114,8 @@ function App() {
       } else if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
         applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
       } else {
+        let chartLayerLoaded = false
+
         const tileLayer = leaflet.tileLayer(selectedPlanLayer.tileUrl, {
           minZoom: selectedPlanLayer.minZoom,
           maxZoom: selectedPlanLayer.maxZoom,
@@ -2044,19 +2129,19 @@ function App() {
         })
 
         tileLayer.on('tileerror', () => {
-          if (!switchedToFallbackLayer) {
-            switchedToFallbackLayer = true
-            applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
-          }
-
-          if (!cancelled) {
+          if (!chartLayerLoaded && !cancelled) {
             setMapInitializing(false)
             setMapTilesLoading(false)
             window.clearTimeout(mapLoadingTimeoutId)
           }
         })
 
+        tileLayer.on('tileload', () => {
+          chartLayerLoaded = true
+        })
+
         tileLayer.once('load', () => {
+          chartLayerLoaded = true
           if (!cancelled) {
             setMapInitializing(false)
             setMapTilesLoading(false)
@@ -2348,6 +2433,10 @@ function App() {
         const marker = leaflet.marker([point.lat, point.lon], { icon, draggable: !isEndpoint })
 
         marker.on('click', async () => {
+          if (mapRef.current) {
+            mapRef.current.panTo([point.lat, point.lon])
+          }
+
           await selectMapAirportFromIdent(point.ident)
         })
 
@@ -2946,32 +3035,28 @@ function App() {
               📍 Waypoints
               <div className="waypoint-entry-box">
                 {waypointChips.length > 0 && (
-                  <div className="waypoint-chip-list">
+                  <div
+                    className="waypoint-chip-list"
+                    onDragOver={handleWaypointListDragOver}
+                    onDrop={handleWaypointListDrop}
+                  >
                     {waypointChips.map((chip, index) => (
                       <div
                         key={chip.key}
                         data-waypoint-chip-index={index}
-                        className={`waypoint-chip waypoint-chip-${chip.status} waypoint-chip-draggable${draggingWaypointIndex === index ? ' dragging' : ''}${draggingWaypointIndex != null && dragOverWaypointIndex === index && draggingWaypointIndex !== index ? ' drop-target' : ''}`}
+                        className={`waypoint-chip waypoint-chip-${chip.status} waypoint-chip-draggable${draggingWaypointIndex === index ? ' dragging' : ''}${draggingWaypointIndex != null && dragWaypointInsertionIndex === index && draggingWaypointIndex !== index ? ' drop-before' : ''}${draggingWaypointIndex != null && dragWaypointInsertionIndex === index + 1 && draggingWaypointIndex !== index ? ' drop-after' : ''}`}
                         draggable
-                        onDragStart={() => {
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = 'move'
                           setDraggingWaypointIndex(index)
-                          setDragOverWaypointIndex(index)
+                          setDragWaypointInsertionIndex(index)
                         }}
-                        onDragOver={(event) => {
-                          event.preventDefault()
-                          setDragOverWaypointIndex(index)
-                        }}
-                        onDragLeave={() => {
-                          setDragOverWaypointIndex((current) => (current === index ? null : current))
-                        }}
-                        onDrop={() => reorderWaypointChips(index)}
-                        onDragEnd={() => {
-                          setDraggingWaypointIndex(null)
-                          setDragOverWaypointIndex(null)
-                        }}
+                        onDragOver={(event) => handleWaypointChipDragOver(index, event)}
+                        onDrop={(event) => handleWaypointChipDrop(index, event)}
+                        onDragEnd={clearWaypointDragState}
                         onTouchStart={() => {
                           setDraggingWaypointIndex(index)
-                          setDragOverWaypointIndex(index)
+                          setDragWaypointInsertionIndex(index)
                         }}
                         onTouchMove={(event) => {
                           const touch = event.touches[0]
@@ -2984,12 +3069,9 @@ function App() {
                         }}
                         onTouchEnd={(event) => {
                           event.preventDefault()
-                          reorderWaypointChips(dragOverWaypointIndex ?? index)
+                          reorderWaypointChips(dragWaypointInsertionIndex ?? index)
                         }}
-                        onTouchCancel={() => {
-                          setDraggingWaypointIndex(null)
-                          setDragOverWaypointIndex(null)
-                        }}
+                        onTouchCancel={clearWaypointDragState}
                         title="Drag to reorder"
                       >
                         <span className="waypoint-chip-handle" aria-hidden="true">⋮⋮</span>
@@ -3101,22 +3183,6 @@ function App() {
 
             {error && <p className="error">{error}</p>}
             {planMapError && <p className="error">{planMapError}</p>}
-
-            <details className="map-load-telemetry" open={mapInitializing || mapTilesLoading || loading}>
-              <summary>Load timings</summary>
-              {loadTelemetry.length === 0 ? (
-                <p className="map-load-telemetry-empty">No samples yet.</p>
-              ) : (
-                <ul className="map-load-telemetry-list">
-                  {loadTelemetry.map((entry) => (
-                    <li key={entry.id} className={`map-load-telemetry-item map-load-telemetry-item-${entry.status}`}>
-                      <span className="map-load-telemetry-label">{entry.label}</span>
-                      <span className="map-load-telemetry-ms">{entry.durationMs.toFixed(0)} ms</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
           </aside>
         </div>
 

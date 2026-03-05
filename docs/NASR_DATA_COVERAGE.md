@@ -71,9 +71,11 @@ Total: 22 files.
 |---|---|---|
 | `/api/data-cycle` | FAA NASR subscription page + ZIP URL | Detects active cycle date and URL |
 | `/api/airport/:icao` | APT.txt | Airport identity/position metadata |
+| `/api/airports/in-bounds` | APT.txt | Viewport airport selection for map features |
 | `/api/airports/search` | APT.txt | Airport lookup/search dataset |
 | `/api/frequencies/:icao` | APT.txt + TWR.txt + COM.txt + FSS.txt + AWOS.txt + WXL.txt | Includes APT CTAF/UNICOM, APT RMK comm frequencies, explicit TWR7 satellite records, supplemental comm files |
 | `/api/runways/:icao` | APT.txt (RWY records) | Runway dimensions/surface/lighting flags |
+| `/api/airports/:ident/diagram` | APT.txt (airport + RWY records) | Server-generated geometry for map runway/overlay/schematic rendering |
 | `/api/navaids/route` | NAV.txt | Route-adjacent navaid selection |
 | `/api/waypoints/resolve` | APT.txt + NAV.txt | Waypoint identifier resolution |
 
@@ -85,9 +87,11 @@ These remain external to NASR and are intentionally sourced elsewhere:
 - FAA operational delay feed: NAS status feed
 - TFR geometry feed: FAA ArcGIS service
 - FAA chart images/overlays: Aeronav digital products endpoints
+- Airport diagram PDFs: FAA d-TPP Metafile XML + FAA d-TPP PDF hosting (`/api/airport-diagram/by-airport/:icao` and `/api/airport-diagram/pdf`)
 
 ## 5) Notes on frequency quality
 
 - Non-towered fields like `1C8` may legitimately only publish CTAF/UNICOM in NASR.
 - Towered airports often include richer comm data via TWR records (including TWR7 satellite-service mappings).
 - Supplemental COM/FSS/AWOS/WXL parsing is additive and filtered by valid VHF comm frequency patterns.
+- Diagram and airport lookups normalize across common identifier forms (ICAO/FAA/IATA/GPS/local) so map and chart requests resolve from mixed user inputs.
