@@ -534,6 +534,8 @@ function App() {
   const markerLayerRef = useRef<any>(null)
   const airportDiagramsLayerRef = useRef<AirportDiagramsLayer | null>(null)
   const lastMapTileLoadKeyRef = useRef('')
+  const hasRunInitialTileRefreshRef = useRef(false)
+  const hasRunInitialRelayoutRef = useRef(false)
   const telemetryIdRef = useRef(0)
   const suppressNextMapClickRef = useRef(false)
   const routeInsertHandleRef = useRef<any>(null)
@@ -581,6 +583,18 @@ function App() {
     }
 
     setLoadTelemetry((current) => [entry, ...current].slice(0, 10))
+  }
+
+  function forceMapRelayout() {
+    const map = mapRef.current
+    if (!map) {
+      return
+    }
+
+    map.invalidateSize(false)
+    const center = map.getCenter()
+    const zoom = map.getZoom()
+    map.setView(center, zoom, { animate: false })
   }
 
   useEffect(() => {
@@ -1843,6 +1857,7 @@ function App() {
     }
 
     let cancelled = false
+    const mapResizeTimers: number[] = []
 
     async function renderInteractivePlanMap() {
       const leaflet = await import('leaflet')
@@ -1875,6 +1890,27 @@ function App() {
         })
 
         leaflet.control.zoom({ position: 'bottomleft' }).addTo(mapRef.current)
+
+        mapResizeTimers.push(window.setTimeout(() => {
+          if (!cancelled && mapRef.current) {
+            forceMapRelayout()
+          }
+        }, 0))
+
+        mapResizeTimers.push(window.setTimeout(() => {
+          if (!cancelled && mapRef.current) {
+            forceMapRelayout()
+          }
+        }, 220))
+
+        if (!hasRunInitialRelayoutRef.current) {
+          hasRunInitialRelayoutRef.current = true
+          mapResizeTimers.push(window.setTimeout(() => {
+            if (!cancelled && mapRef.current) {
+              forceMapRelayout()
+            }
+          }, 650))
+        }
 
         recenterToUserLocation(false)
 
@@ -1911,7 +1947,7 @@ function App() {
       }
 
       const map = mapRef.current
-      map.invalidateSize()
+      forceMapRelayout()
       map.setMinZoom(selectedPlanLayer.minZoom)
       map.setMaxZoom(maxInteractiveZoom)
 
@@ -1977,9 +2013,16 @@ function App() {
 
       baseLayer.once('load', () => {
         if (!cancelled && !showFaaCharts) {
+          forceMapRelayout()
           setMapInitializing(false)
           setMapTilesLoading(false)
           window.clearTimeout(mapLoadingTimeoutId)
+        }
+      })
+
+      baseLayer.on('load', () => {
+        if (!cancelled && mapRef.current) {
+          forceMapRelayout()
         }
       })
 
@@ -1988,54 +2031,16 @@ function App() {
       } else if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
         applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
       } else {
-        const BlobTileLayer = (leaflet as any).GridLayer.extend({
-          createTile(coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) {
-            const tile = document.createElement('img')
-            tile.alt = ''
-            tile.setAttribute('role', 'presentation')
-
-            const tileUrl = selectedPlanLayer.tileUrl
-              .replace('{z}', String(coords.z))
-              .replace('{x}', String(coords.x))
-              .replace('{y}', String(coords.y))
-
-            fetch(tileUrl)
-              .then((response) => {
-                if (!response.ok) {
-                  throw new Error(`Tile request failed (${response.status})`)
-                }
-
-                return response.blob()
-              })
-              .then((blob) => {
-                const objectUrl = URL.createObjectURL(blob)
-
-                tile.onload = () => {
-                  URL.revokeObjectURL(objectUrl)
-                  done(null, tile)
-                }
-
-                tile.onerror = () => {
-                  URL.revokeObjectURL(objectUrl)
-                  done(new Error('Tile image decode failed.'), tile)
-                }
-
-                tile.src = objectUrl
-              })
-              .catch((error) => {
-                done(error as Error, tile)
-              })
-
-            return tile
-          }
-        })
-
-        const tileLayer = new BlobTileLayer({
+        const tileLayer = leaflet.tileLayer(selectedPlanLayer.tileUrl, {
           minZoom: selectedPlanLayer.minZoom,
           maxZoom: selectedPlanLayer.maxZoom,
           minNativeZoom: selectedPlanLayer.minNativeZoom,
           maxNativeZoom: selectedPlanLayer.maxZoom,
-          attribution: selectedPlanLayer.attribution
+          attribution: selectedPlanLayer.attribution,
+          detectRetina: true,
+          crossOrigin: true,
+          keepBuffer: 4,
+          updateWhenIdle: false
         })
 
         tileLayer.on('tileerror', () => {
@@ -2062,6 +2067,48 @@ function App() {
         tileLayer.addTo(map)
         tileLayer.setZIndex(10)
         chartLayerRef.current = tileLayer
+      }
+
+      if (!hasRunInitialTileRefreshRef.current) {
+        hasRunInitialTileRefreshRef.current = true
+
+        mapResizeTimers.push(window.setTimeout(() => {
+          if (cancelled || !mapRef.current) {
+            return
+          }
+
+          mapRef.current.invalidateSize()
+          if (typeof baseLayerRef.current?.redraw === 'function') {
+            baseLayerRef.current.redraw()
+          }
+          if (typeof chartLayerRef.current?.redraw === 'function') {
+            chartLayerRef.current.redraw()
+          }
+        }, 320))
+
+        mapResizeTimers.push(window.setTimeout(() => {
+          if (cancelled || !mapRef.current) {
+            return
+          }
+
+          mapRef.current.invalidateSize()
+
+          if (baseLayerRef.current && mapRef.current.hasLayer(baseLayerRef.current)) {
+            mapRef.current.removeLayer(baseLayerRef.current)
+            baseLayerRef.current.addTo(mapRef.current)
+            if (typeof baseLayerRef.current.setZIndex === 'function') {
+              baseLayerRef.current.setZIndex(0)
+            }
+          }
+
+          if (chartLayerRef.current && mapRef.current.hasLayer(chartLayerRef.current)) {
+            mapRef.current.removeLayer(chartLayerRef.current)
+            chartLayerRef.current.addTo(mapRef.current)
+            if (typeof chartLayerRef.current.setZIndex === 'function') {
+              chartLayerRef.current.setZIndex(10)
+            }
+          }
+        }, 1100))
       }
 
       if (tfrLayerRef.current) {
@@ -2390,6 +2437,7 @@ function App() {
 
     return () => {
       cancelled = true
+      mapResizeTimers.forEach((timerId) => window.clearTimeout(timerId))
     }
   }, [
     routePoints,
@@ -2402,6 +2450,24 @@ function App() {
     showSchematicSurfaceLayout,
     selectedMapAirport
   ])
+
+  useEffect(() => {
+    if (!mapContainerRef.current || typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (mapRef.current) {
+        forceMapRelayout()
+      }
+    })
+
+    observer.observe(mapContainerRef.current)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     return () => {
