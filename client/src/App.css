@@ -945,6 +945,49 @@ th {
   accent-color: #ff4a93;
 }
 
+.map-diagram-legend {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  z-index: 630;
+  max-width: min(440px, calc(100% - 1.4rem));
+  border-radius: 10px;
+  padding: 0.45rem 0.65rem;
+  background: rgba(17, 22, 33, 0.9);
+  color: #f0f5ff;
+  border: 1px solid rgba(160, 176, 204, 0.55);
+}
+
+.map-diagram-legend p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.map-diagram-legend p + p {
+  margin-top: 0.2rem;
+}
+
+.airport-diagram-label-icon {
+  background: transparent;
+  border: 0;
+}
+
+.airport-diagram-label {
+  display: inline-block;
+  min-width: 1.6rem;
+  padding: 0.05rem 0.2rem;
+  border-radius: 4px;
+  background: rgba(16, 22, 32, 0.85);
+  color: #f5f8fe;
+  border: 1px solid rgba(220, 230, 246, 0.56);
+  font-size: 0.66rem;
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transform-origin: center;
+}
+
 .map-flight-actions {
   display: flex;
   gap: 0.45rem;
@@ -1007,6 +1050,12 @@ th {
     position: static;
     order: 3;
     margin: 0;
+  }
+
+  .map-diagram-legend {
+    position: static;
+    order: 3;
+    margin-top: -0.15rem;
   }
 
   .map-flight-panel {

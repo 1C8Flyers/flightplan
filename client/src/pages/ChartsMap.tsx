@@ -713,6 +713,7 @@ export default function ChartsMap() {
               ))}
             </select>
           </label>
+
         </div>
 
         <p className="charts-mouse-position">
@@ -844,6 +845,7 @@ export default function ChartsMap() {
         )}
 
         <div ref={mapHostRef} className="charts-map" />
+
       </section>
 
       <footer className="charts-copyright">© 1C8 Flyers, LLC</footer>

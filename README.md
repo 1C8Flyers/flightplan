@@ -11,6 +11,8 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 - Live FAA NAS delay feed integration
 - Suggested enroute waypoint airports auto-generated along route corridor
 - FAA sectional chart selector + route overlay map
+- Leaflet airport diagram overlay generated from FAA NASR runway geometry (no FAA artwork reuse)
+- Optional schematic surface layout (approximate apron/taxi connectors)
 - Printable in-flight nav log packet with write-in fields (ATD/ATA/actual GS/fuel/notes), formatted for kneeboard size
 - Printable packet includes departure/arrival frequencies and decoded METAR summary
 - Printable full-page landscape flight plan data sheet with route navaids and morse patterns
@@ -30,6 +32,15 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 - API endpoint: `GET /api/data-cycle`
 - Response includes the detected NASR effective date and ZIP URL currently in use by the server.
 - Detailed NASR availability and current usage map: `docs/NASR_DATA_COVERAGE.md`
+
+### Airport Diagram GeoJSON API
+
+- API endpoint: `GET /api/airports/:ident/diagram?schematic=0|1`
+- Response includes airport metadata, runway polygons, runway-end labels, overlays (closed `X`, displaced thresholds), and optional schematic apron/taxi geometry.
+- Runway feature properties include `source: "NASR"` and `fidelity: "measured" | "estimated"`.
+- Client map controls include:
+	- Planner map Layers menu: `Airport Diagrams`
+	- Planner map Layers menu: `Schematic Surface Layout (Approx.)` (enabled only when diagrams are on)
 
 ## Stack
 
@@ -71,6 +82,13 @@ After updating env vars, restart the frontend dev server.
 
 ```bash
 npm run build
+```
+
+Server validation commands:
+
+```bash
+npm run test --workspace server
+npm run smoke:diagram --workspace server -- MSP
 ```
 
 ## Deploy with Docker (NAS)

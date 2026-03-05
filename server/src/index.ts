@@ -4,6 +4,7 @@ import express from 'express'
 import { createRequire } from 'module'
 import { parseStringPromise } from 'xml2js'
 import { z } from 'zod'
+import { registerDiagramRoutes } from './routes/diagram.js'
 
 const require = createRequire(import.meta.url)
 const geomagnetism = require('geomagnetism')
@@ -98,15 +99,22 @@ type AirportFrequencyRecord = {
 type RunwayRecord = {
   id: string
   airportIdent: string
-  lengthFt: number | null
-  widthFt: number | null
-  surface: string | null
+  lengthFt: number
+  widthFt: number
+  surface: string
   lighted: boolean
   closed: boolean
-  leIdent: string | null
-  heIdent: string | null
+  leIdent: string
+  heIdent: string
   leHeadingDeg: number | null
   heHeadingDeg: number | null
+  leLat: number | null
+  leLon: number | null
+  heLat: number | null
+  heLon: number | null
+  leDisplacedThresholdFt: number | null
+  heDisplacedThresholdFt: number | null
+  runwayElevationFt: number | null
 }
 
 type WaypointSuggestion = {
@@ -243,34 +251,38 @@ async function fetchFaaDelays(): Promise<FaaDelay[]> {
     return faaCache.delays
   }
 
-  const response = await fetch('https://nasstatus.faa.gov/api/airport-status-information')
-  if (!response.ok) {
-    throw new Error(`FAA feed request failed (${response.status})`)
-  }
-
-  const xmlBody = await response.text()
-  const parsed = await parseStringPromise(xmlBody)
-
-  const delayTypes = parsed?.AIRPORT_STATUS_INFORMATION?.Delay_type ?? []
-  const delays: FaaDelay[] = []
-
-  for (const group of delayTypes) {
-    const list = group?.Arrival_Departure_Delay_List?.[0]?.Delay ?? []
-    for (const item of list) {
-      const arrivalDeparture = item?.Arrival_Departure?.[0] ?? {}
-      delays.push({
-        airportCode: String(item?.ARPT?.[0] ?? '').toUpperCase(),
-        reason: String(item?.Reason?.[0] ?? 'Unknown'),
-        type: String(arrivalDeparture?.$?.Type ?? 'Unknown'),
-        minMinutes: String(arrivalDeparture?.Min?.[0] ?? '0'),
-        maxMinutes: String(arrivalDeparture?.Max?.[0] ?? '0'),
-        trend: String(arrivalDeparture?.Trend?.[0] ?? 'Unknown')
-      })
+  try {
+    const response = await fetch('https://nasstatus.faa.gov/api/airport-status-information')
+    if (!response.ok) {
+      throw new Error(`FAA feed request failed (${response.status})`)
     }
-  }
 
-  faaCache = { loadedAt: Date.now(), delays }
-  return delays
+    const xmlBody = await response.text()
+    const parsed = await parseStringPromise(xmlBody)
+
+    const delayTypes = parsed?.AIRPORT_STATUS_INFORMATION?.Delay_type ?? []
+    const delays: FaaDelay[] = []
+
+    for (const group of delayTypes) {
+      const list = group?.Arrival_Departure_Delay_List?.[0]?.Delay ?? []
+      for (const item of list) {
+        const arrivalDeparture = item?.Arrival_Departure?.[0] ?? {}
+        delays.push({
+          airportCode: String(item?.ARPT?.[0] ?? '').toUpperCase(),
+          reason: String(item?.Reason?.[0] ?? 'Unknown'),
+          type: String(arrivalDeparture?.$?.Type ?? 'Unknown'),
+          minMinutes: String(arrivalDeparture?.Min?.[0] ?? '0'),
+          maxMinutes: String(arrivalDeparture?.Max?.[0] ?? '0'),
+          trend: String(arrivalDeparture?.Trend?.[0] ?? 'Unknown')
+        })
+      }
+    }
+
+    faaCache = { loadedAt: Date.now(), delays }
+    return delays
+  } catch {
+    return faaCache?.delays ?? []
+  }
 }
 
 function parseCsvLine(line: string) {
@@ -340,6 +352,75 @@ function parseDmsCoordinate(value: string) {
 function parseNumberOrNull(value: string) {
   const parsed = Number(value.trim())
   return Number.isNaN(parsed) ? null : parsed
+}
+
+function normalizeHeading(heading: number) {
+  const normalized = ((heading % 360) + 360) % 360
+  return normalized === 0 ? 360 : normalized
+}
+
+function oppositeHeading(heading: number) {
+  return normalizeHeading(heading + 180)
+}
+
+function parseRunwayEndIdent(value: string) {
+  const normalized = value.trim().toUpperCase().replace(/^0+/, '')
+  if (!normalized) {
+    return null
+  }
+
+  const match = normalized.match(/^(\d{1,2})([LCRW]?)$/)
+  if (!match) {
+    return null
+  }
+
+  const runwayNumber = Number(match[1])
+  if (!Number.isFinite(runwayNumber) || runwayNumber < 1 || runwayNumber > 36) {
+    return null
+  }
+
+  const baseHeading = runwayNumber === 36 ? 360 : runwayNumber * 10
+  return normalizeHeading(baseHeading)
+}
+
+function calculateInitialBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const phi1 = toRadians(lat1)
+  const phi2 = toRadians(lat2)
+  const lambda = toRadians(lon2 - lon1)
+
+  const y = Math.sin(lambda) * Math.cos(phi2)
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(lambda)
+  const bearing = (Math.atan2(y, x) * 180) / Math.PI
+  return normalizeHeading(bearing)
+}
+
+function extractRunwayEndpointCoordinates(line: string) {
+  const dmsValues = [...line.matchAll(/\d{2,3}-\d{2}-\d{2}\.\d+[NSEW]/g)].map((match) => match[0])
+  const coordinates: Array<{ lat: number; lon: number }> = []
+  let pendingLat: number | null = null
+
+  for (const token of dmsValues) {
+    const parsed = parseDmsCoordinate(token)
+    if (Number.isNaN(parsed)) {
+      continue
+    }
+
+    const hemisphere = token.at(-1)
+    if (hemisphere === 'N' || hemisphere === 'S') {
+      pendingLat = parsed
+      continue
+    }
+
+    if ((hemisphere === 'E' || hemisphere === 'W') && pendingLat != null) {
+      coordinates.push({ lat: pendingLat, lon: parsed })
+      pendingLat = null
+    }
+  }
+
+  return {
+    le: coordinates[0] ?? null,
+    he: coordinates[1] ?? null
+  }
 }
 
 function parseFreqMhzToKhz(value: string) {
@@ -923,13 +1004,35 @@ async function fetchRunwaysDataset() {
       continue
     }
 
-    const [leIdent, heIdent] = runwayIdent.split('/').map((value: string) => value.trim() || null)
-    const lengthFt = parseNumberOrNull(line.slice(24, 28))
-    const widthFt = parseNumberOrNull(line.slice(29, 32))
-    const surface = line.slice(32, 44).trim() || null
+    const [rawLeIdent, rawHeIdent] = runwayIdent.split('/').map((value: string) => value.trim().toUpperCase())
+    const leIdent = rawLeIdent || 'LE'
+    const heIdent = rawHeIdent || 'HE'
+    const lengthFt = parseNumberOrNull(line.slice(24, 28)) ?? 0
+    const widthFt = parseNumberOrNull(line.slice(29, 32)) ?? 0
+    const surface = line.slice(32, 44).trim() || 'UNKNOWN'
     const lighting = line.slice(44, 60).trim().toUpperCase()
     const lighted = lighting.includes('MED') || lighting.includes('HIGH') || lighting.includes('LOW')
     const closed = line.includes('CLSD')
+    const endpointCoords = extractRunwayEndpointCoordinates(line)
+
+    const leDisplacedThresholdFt = parseNumberOrNull(line.slice(475, 482))
+    const heDisplacedThresholdFt = parseNumberOrNull(line.slice(755, 762))
+    const runwayElevationFt = parseNumberOrNull(line.slice(126, 131))
+
+    const leHeadingFromIdent = parseRunwayEndIdent(leIdent)
+    const heHeadingFromIdent = parseRunwayEndIdent(heIdent)
+
+    const headingFromEndpoints = endpointCoords.le && endpointCoords.he
+      ? calculateInitialBearing(endpointCoords.le.lat, endpointCoords.le.lon, endpointCoords.he.lat, endpointCoords.he.lon)
+      : null
+
+    const leHeadingDeg = headingFromEndpoints
+      ?? leHeadingFromIdent
+      ?? (heHeadingFromIdent != null ? oppositeHeading(heHeadingFromIdent) : null)
+
+    const heHeadingDeg = headingFromEndpoints != null
+      ? oppositeHeading(headingFromEndpoints)
+      : (heHeadingFromIdent ?? (leHeadingFromIdent != null ? oppositeHeading(leHeadingFromIdent) : null))
 
     runways.push({
       id: `${airportIdent}-${runwayIdent}`,
@@ -941,8 +1044,15 @@ async function fetchRunwaysDataset() {
       closed,
       leIdent,
       heIdent,
-      leHeadingDeg: null,
-      heHeadingDeg: null
+      leHeadingDeg,
+      heHeadingDeg,
+      leLat: endpointCoords.le?.lat ?? null,
+      leLon: endpointCoords.le?.lon ?? null,
+      heLat: endpointCoords.he?.lat ?? null,
+      heLon: endpointCoords.he?.lon ?? null,
+      leDisplacedThresholdFt,
+      heDisplacedThresholdFt,
+      runwayElevationFt
     })
   }
 
@@ -1008,12 +1118,21 @@ async function fetchStationByCandidateCodes(code: string) {
   const candidates = getAirportCodeCandidates(code)
 
   for (const candidate of candidates) {
-    const payload = await fetchJson<unknown[]>(
-      `https://aviationweather.gov/api/data/stationinfo?ids=${candidate}&format=json`
-    )
+    try {
+      const payload = await fetchJson<unknown[]>(
+        `https://aviationweather.gov/api/data/stationinfo?ids=${candidate}&format=json`
+      )
 
-    if (payload.length) {
-      return stationSchema.parse(payload[0])
+      if (!payload.length) {
+        continue
+      }
+
+      const parsed = stationSchema.safeParse(payload[0])
+      if (parsed.success) {
+        return parsed.data
+      }
+    } catch {
+      continue
     }
   }
 
@@ -1680,7 +1799,13 @@ app.get('/api/airport/:icao', async (req, res) => {
       }
     })
   } catch (error) {
-    res.status(500).json({ error: (error as Error).message })
+    const message = (error as Error).message
+    if (message.startsWith('No airport found for')) {
+      res.status(404).json({ error: message })
+      return
+    }
+
+    res.status(500).json({ error: message })
   }
 })
 
@@ -1943,6 +2068,52 @@ app.get('/api/airports/search', async (req, res) => {
     const matches = searchAirportsByQuery(query, airports)
 
     res.json({ airports: matches })
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+})
+
+app.get('/api/airports/in-bounds', async (req, res) => {
+  try {
+    const minLat = Number(req.query.minLat)
+    const maxLat = Number(req.query.maxLat)
+    const minLon = Number(req.query.minLon)
+    const maxLon = Number(req.query.maxLon)
+    const limitRaw = Number(req.query.limit)
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 30
+
+    if ([minLat, maxLat, minLon, maxLon].some((value) => Number.isNaN(value))) {
+      res.status(400).json({ error: 'minLat, maxLat, minLon, and maxLon are required.' })
+      return
+    }
+
+    const airports = await fetchAirportsDataset()
+    const runways = await fetchRunwaysDataset()
+
+    const longestRunwayByAirport = new Map<string, number>()
+    for (const runway of runways) {
+      const current = longestRunwayByAirport.get(runway.airportIdent) ?? 0
+      if (runway.lengthFt > current) {
+        longestRunwayByAirport.set(runway.airportIdent, runway.lengthFt)
+      }
+    }
+
+    const results = airports
+      .filter((airport) => airport.lat >= minLat && airport.lat <= maxLat && airport.lon >= minLon && airport.lon <= maxLon)
+      .map((airport) => {
+        const longestRunwayFt = longestRunwayByAirport.get(airport.ident) ?? 0
+        return {
+          ident: airport.ident,
+          name: airport.name,
+          lat: airport.lat,
+          lon: airport.lon,
+          longestRunwayFt
+        }
+      })
+      .sort((a, b) => b.longestRunwayFt - a.longestRunwayFt)
+      .slice(0, limit)
+
+    res.json({ airports: results })
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })
   }
@@ -2391,6 +2562,11 @@ app.get('/api/tfrs', async (_req, res) => {
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })
   }
+})
+
+registerDiagramRoutes(app, {
+  fetchAirportsDataset,
+  fetchRunwaysDataset
 })
 
 app.listen(PORT, () => {

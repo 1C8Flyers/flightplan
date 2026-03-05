@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
+import { AirportDiagramsLayer } from './map/AirportDiagramsLayer'
 
 type BaseMapStyle = 'light' | 'dark'
 
@@ -465,6 +466,20 @@ function App() {
   const [selectedMapAirportNotamsLoading, setSelectedMapAirportNotamsLoading] = useState(false)
   const [selectedMapAirportNotamsError, setSelectedMapAirportNotamsError] = useState<string | null>(null)
   const [showFaaCharts, setShowFaaCharts] = useState(true)
+  const [showAirportDiagrams, setShowAirportDiagrams] = useState(() => {
+    if (typeof window === 'undefined') {
+      return true
+    }
+
+    return window.localStorage.getItem('navlog:charts:airport-diagrams-enabled') !== '0'
+  })
+  const [showSchematicSurfaceLayout, setShowSchematicSurfaceLayout] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+
+    return window.localStorage.getItem('navlog:charts:airport-diagrams-schematic-enabled') === '1'
+  })
   const [showTfrOverlay, setShowTfrOverlay] = useState(true)
   const [layerControlOpen, setLayerControlOpen] = useState(false)
   const [planLayerId, setPlanLayerId] = useState(() => {
@@ -506,6 +521,7 @@ function App() {
   const tfrLayerRef = useRef<any>(null)
   const routeLayerRef = useRef<any>(null)
   const markerLayerRef = useRef<any>(null)
+  const airportDiagramsLayerRef = useRef<AirportDiagramsLayer | null>(null)
   const suppressNextMapClickRef = useRef(false)
   const routeInsertHandleRef = useRef<any>(null)
 
@@ -548,6 +564,18 @@ function App() {
       window.localStorage.setItem('navlog:charts:selected-basemap', planBaseMapId)
     }
   }, [planBaseMapId])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('navlog:charts:airport-diagrams-enabled', showAirportDiagrams ? '1' : '0')
+    }
+  }, [showAirportDiagrams])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('navlog:charts:airport-diagrams-schematic-enabled', showSchematicSurfaceLayout ? '1' : '0')
+    }
+  }, [showSchematicSurfaceLayout])
 
   useEffect(() => {
     let cancelled = false
@@ -1828,6 +1856,23 @@ function App() {
       map.setMinZoom(selectedPlanLayer.minZoom)
       map.setMaxZoom(maxInteractiveZoom)
 
+      if (!airportDiagramsLayerRef.current) {
+        airportDiagramsLayerRef.current = new AirportDiagramsLayer(map, {
+          enabled: showAirportDiagrams,
+          schematicEnabled: showSchematicSurfaceLayout,
+          mode: selectedMapAirport ? 'selected' : 'in-view',
+          selectedAirportIdent: selectedMapAirport?.airport.icao ?? null,
+          maxAirports: 30,
+          minZoom: 11
+        })
+      } else {
+        airportDiagramsLayerRef.current.setEnabled(showAirportDiagrams)
+        airportDiagramsLayerRef.current.setSchematicEnabled(showSchematicSurfaceLayout)
+        airportDiagramsLayerRef.current.setMode(selectedMapAirport ? 'selected' : 'in-view')
+        airportDiagramsLayerRef.current.setSelectedAirportIdent(selectedMapAirport?.airport.icao ?? null)
+        airportDiagramsLayerRef.current.refreshNow()
+      }
+
       let switchedToFallbackLayer = false
 
       function applyFallbackTileLayer(message?: string) {
@@ -2250,14 +2295,29 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [routePoints, selectedPlanLayer, selectedBaseMap, showFaaCharts, showTfrOverlay, userLocation])
+  }, [
+    routePoints,
+    selectedPlanLayer,
+    selectedBaseMap,
+    showFaaCharts,
+    showTfrOverlay,
+    userLocation,
+    showAirportDiagrams,
+    showSchematicSurfaceLayout,
+    selectedMapAirport
+  ])
 
   useEffect(() => {
     return () => {
+      if (airportDiagramsLayerRef.current) {
+        airportDiagramsLayerRef.current.destroy()
+      }
+
       if (mapRef.current) {
         mapRef.current.remove()
       }
 
+      airportDiagramsLayerRef.current = null
       mapRef.current = null
       baseLayerRef.current = null
       chartLayerRef.current = null
@@ -2572,6 +2632,25 @@ function App() {
                   🛩 FAA Charts
                 </label>
 
+                <label className="map-overlay-check">
+                  <input
+                    type="checkbox"
+                    checked={showAirportDiagrams}
+                    onChange={(event) => setShowAirportDiagrams(event.target.checked)}
+                  />
+                  🛬 Airport Diagrams
+                </label>
+
+                <label className="map-overlay-check">
+                  <input
+                    type="checkbox"
+                    checked={showSchematicSurfaceLayout}
+                    disabled={!showAirportDiagrams}
+                    onChange={(event) => setShowSchematicSurfaceLayout(event.target.checked)}
+                  />
+                  🧩 Schematic Surface (Approx.)
+                </label>
+
                 <label>
                   🗺 Map Layer
                   <select value={planLayerId} onChange={(event) => setPlanLayerId(event.target.value)}>
@@ -2601,6 +2680,13 @@ function App() {
               </div>
             )}
           </div>
+
+          {showAirportDiagrams && (
+            <aside className="map-diagram-legend" role="note" aria-live="polite">
+              <p>Runway diagram from FAA NASR; surface layout may be schematic.</p>
+              {showSchematicSurfaceLayout && <p>Schematic surface layout (approx.).</p>}
+            </aside>
+          )}
 
           <aside className="map-flight-panel">
             <div className="map-flight-header">
