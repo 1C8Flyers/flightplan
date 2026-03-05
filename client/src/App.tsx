@@ -255,6 +255,13 @@ type TfrFeatureCollection = {
   }>
 }
 
+type LoadTelemetryEntry = {
+  id: number
+  label: string
+  durationMs: number
+  status: 'ok' | 'error'
+}
+
 const routeNavaidTypeOptions = ['VOR', 'VOR-DME', 'VORTAC', 'NDB', 'NDB-DME'] as const
 const mapAirportTabs: Array<{ id: MapAirportTab; label: string }> = [
   { id: 'weather', label: 'Weather' },
@@ -449,6 +456,7 @@ function App() {
   const [mapAirportSearchFlightConditions, setMapAirportSearchFlightConditions] = useState<Record<string, FlightCategory>>({})
   const [mapAirportSearchFlightConditionsLoading, setMapAirportSearchFlightConditionsLoading] = useState<Record<string, boolean>>({})
   const [selectedMapAirport, setSelectedMapAirport] = useState<AirportResponse | null>(null)
+  const [selectedMapAirportLoading, setSelectedMapAirportLoading] = useState(false)
   const [selectedMapAirportDistanceNm, setSelectedMapAirportDistanceNm] = useState<number | null>(null)
   const [selectedMapAirportWeather, setSelectedMapAirportWeather] = useState<WeatherResponse | null>(null)
   const [selectedMapAirportError, setSelectedMapAirportError] = useState<string | null>(null)
@@ -507,6 +515,9 @@ function App() {
     return 'light'
   })
   const [planMapError, setPlanMapError] = useState<string | null>(null)
+  const [mapInitializing, setMapInitializing] = useState(true)
+  const [mapTilesLoading, setMapTilesLoading] = useState(false)
+  const [loadTelemetry, setLoadTelemetry] = useState<LoadTelemetryEntry[]>([])
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null)
   const [dataCycle, setDataCycle] = useState<DataCycleResponse | null>(null)
   const [routeInsertDragging, setRouteInsertDragging] = useState(false)
@@ -522,6 +533,8 @@ function App() {
   const routeLayerRef = useRef<any>(null)
   const markerLayerRef = useRef<any>(null)
   const airportDiagramsLayerRef = useRef<AirportDiagramsLayer | null>(null)
+  const lastMapTileLoadKeyRef = useRef('')
+  const telemetryIdRef = useRef(0)
   const suppressNextMapClickRef = useRef(false)
   const routeInsertHandleRef = useRef<any>(null)
 
@@ -552,6 +565,23 @@ function App() {
     () => getFlightCategory(selectedMapAirportWeather),
     [selectedMapAirportWeather]
   )
+
+  function normalizeTelemetryPath(path: string) {
+    const [base] = path.split('?')
+    return base || path
+  }
+
+  function recordTelemetry(label: string, durationMs: number, status: 'ok' | 'error' = 'ok') {
+    telemetryIdRef.current += 1
+    const entry: LoadTelemetryEntry = {
+      id: telemetryIdRef.current,
+      label,
+      durationMs,
+      status
+    }
+
+    setLoadTelemetry((current) => [entry, ...current].slice(0, 10))
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -914,15 +944,30 @@ function App() {
   }, [selectedMapAirportIcao])
 
   async function fetchJson<T>(path: string): Promise<T> {
-    const response = await fetch(path)
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}))
-      throw new Error(body.error ?? `Request failed: ${path}`)
+    const startedAt = performance.now()
+
+    try {
+      const response = await fetch(path)
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        recordTelemetry(`HTTP ${response.status} ${normalizeTelemetryPath(path)}`, performance.now() - startedAt, 'error')
+        throw new Error(body.error ?? `Request failed: ${path}`)
+      }
+
+      const data = await response.json() as T
+      recordTelemetry(normalizeTelemetryPath(path), performance.now() - startedAt, 'ok')
+      return data
+    } catch (caughtError) {
+      if ((caughtError as Error).name !== 'AbortError') {
+        recordTelemetry(`ERR ${normalizeTelemetryPath(path)}`, performance.now() - startedAt, 'error')
+      }
+
+      throw caughtError
     }
-    return response.json() as Promise<T>
   }
 
   async function selectMapAirportFromIdent(ident: string) {
+    setSelectedMapAirportLoading(true)
     try {
       const airport = await fetchJson<AirportResponse>(`/api/airport/${ident}`)
       setSelectedMapAirport(airport)
@@ -940,6 +985,8 @@ function App() {
       setSelectedMapAirportDistanceNm(null)
       setSelectedMapAirportWeather(null)
       setSelectedMapAirportError(`No airport information available for ${ident}.`)
+    } finally {
+      setSelectedMapAirportLoading(false)
     }
   }
 
@@ -956,6 +1003,7 @@ function App() {
 
   function clearSelectedMapAirport() {
     setSelectedMapAirport(null)
+    setSelectedMapAirportLoading(false)
     setSelectedMapAirportDistanceNm(null)
     setSelectedMapAirportWeather(null)
     setSelectedMapAirportError(null)
@@ -1802,6 +1850,13 @@ function App() {
         return
       }
 
+      const mapTileLoadKey = `${selectedBaseMap.id}|${showFaaCharts ? selectedPlanLayer.id : 'basemap-only'}`
+      const shouldShowTileLoader = !mapRef.current || lastMapTileLoadKeyRef.current !== mapTileLoadKey
+      if (shouldShowTileLoader) {
+        setMapTilesLoading(true)
+        lastMapTileLoadKeyRef.current = mapTileLoadKey
+      }
+
       const maxInteractiveZoom = showFaaCharts
         ? selectedPlanLayer.maxZoom
         : Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom)
@@ -1809,6 +1864,7 @@ function App() {
       setPlanMapError(null)
 
       if (!mapRef.current) {
+        setMapInitializing(true)
         mapRef.current = leaflet.map(mapContainerRef.current, {
           center: [39.5, -98.35],
           zoom: selectedPlanLayer.minZoom,
@@ -1828,6 +1884,7 @@ function App() {
             return
           }
 
+          setSelectedMapAirportLoading(true)
           try {
             const nearest = await fetchJson<NearestAirportResponse>(
               `/api/airport/nearest?lat=${event.latlng.lat}&lon=${event.latlng.lng}`
@@ -1847,6 +1904,8 @@ function App() {
             setSelectedMapAirportDistanceNm(null)
             setSelectedMapAirportWeather(null)
             setSelectedMapAirportError('No nearby airport information available at this map position.')
+          } finally {
+            setSelectedMapAirportLoading(false)
           }
         })
       }
@@ -1909,6 +1968,21 @@ function App() {
       baseLayer.setZIndex(0)
       baseLayerRef.current = baseLayer
 
+      let mapLoadingTimeoutId = window.setTimeout(() => {
+        if (!cancelled) {
+          setMapInitializing(false)
+          setMapTilesLoading(false)
+        }
+      }, 6000)
+
+      baseLayer.once('load', () => {
+        if (!cancelled && !showFaaCharts) {
+          setMapInitializing(false)
+          setMapTilesLoading(false)
+          window.clearTimeout(mapLoadingTimeoutId)
+        }
+      })
+
       if (!showFaaCharts) {
         chartLayerRef.current = null
       } else if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
@@ -1969,6 +2043,20 @@ function App() {
             switchedToFallbackLayer = true
             applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
           }
+
+          if (!cancelled) {
+            setMapInitializing(false)
+            setMapTilesLoading(false)
+            window.clearTimeout(mapLoadingTimeoutId)
+          }
+        })
+
+        tileLayer.once('load', () => {
+          if (!cancelled) {
+            setMapInitializing(false)
+            setMapTilesLoading(false)
+            window.clearTimeout(mapLoadingTimeoutId)
+          }
         })
 
         tileLayer.addTo(map)
@@ -2019,6 +2107,10 @@ function App() {
 
         if (userLocation) {
           map.setView([userLocation.lat, userLocation.lon], Math.max(selectedPlanLayer.minZoom, defaultLocationZoom))
+        }
+
+        if (!cancelled) {
+          setMapInitializing(false)
         }
 
         return
@@ -2285,6 +2377,10 @@ function App() {
 
       markerLayerRef.current = leaflet.layerGroup(markers)
       markerLayerRef.current.addTo(map)
+
+      if (!cancelled) {
+        setMapInitializing(false)
+      }
     }
 
     renderInteractivePlanMap().catch((caughtError) => {
@@ -2336,6 +2432,13 @@ function App() {
             ref={mapContainerRef}
             className={`sectional-map${routeInsertDragging ? ' sectional-map-route-insert' : ''}`}
           />
+
+          {(mapInitializing || mapTilesLoading) && (
+            <div className="map-loading-overlay" role="status" aria-live="polite">
+              <span className="map-loading-spinner" aria-hidden="true" />
+              <p>{mapInitializing ? 'Loading map…' : 'Loading map tiles…'}</p>
+            </div>
+          )}
 
           <div className="map-search-overlay" ref={mapSearchContainerRef}>
             <label className="map-search-box">
@@ -2429,6 +2532,13 @@ function App() {
                     <button type="button" className="map-airport-info-close" onClick={clearSelectedMapAirport} aria-label="Close airport info">×</button>
                   </header>
 
+                  {selectedMapAirportLoading && (
+                    <div className="map-airport-loading-inline" role="status" aria-live="polite">
+                      <span className="map-loading-spinner map-loading-spinner-small" aria-hidden="true" />
+                      <span>Loading airport details…</span>
+                    </div>
+                  )}
+
                   <div className={`map-airport-flight-conditions map-airport-flight-conditions-${selectedMapAirportFlightCategory.toLowerCase()}`}>
                     {selectedMapAirportFlightCategory}
                   </div>
@@ -2502,7 +2612,13 @@ function App() {
 
                     {selectedMapAirportTab === 'frequencies' && (
                       <>
-                        {selectedMapAirportFrequenciesLoading && <p>Loading frequencies…</p>}
+                        {selectedMapAirportFrequenciesLoading && (
+                          <div className="loading-placeholder-lines" aria-hidden="true">
+                            <span />
+                            <span />
+                            <span />
+                          </div>
+                        )}
                         {!selectedMapAirportFrequenciesLoading && selectedMapAirportFrequenciesError && <p className="map-airport-info-error">{selectedMapAirportFrequenciesError}</p>}
                         {!selectedMapAirportFrequenciesLoading && !selectedMapAirportFrequenciesError && selectedMapAirportFrequencies.length === 0 && (
                           <p>No published frequencies found.</p>
@@ -2523,7 +2639,12 @@ function App() {
 
                     {selectedMapAirportTab === 'charts' && (
                       <>
-                        {selectedMapAirportDiagramLoading && <p>Loading airport diagram…</p>}
+                        {selectedMapAirportDiagramLoading && (
+                          <div className="loading-placeholder-lines" aria-hidden="true">
+                            <span />
+                            <span />
+                          </div>
+                        )}
                         {!selectedMapAirportDiagramLoading && selectedMapAirportDiagramError && <p className="map-airport-info-error">{selectedMapAirportDiagramError}</p>}
                         {!selectedMapAirportDiagramLoading && !selectedMapAirportDiagramError && !selectedMapAirportDiagram && (
                           <p>No airport diagram available.</p>
@@ -2545,7 +2666,13 @@ function App() {
 
                     {selectedMapAirportTab === 'runways' && (
                       <>
-                        {selectedMapAirportRunwaysLoading && <p>Loading runway data…</p>}
+                        {selectedMapAirportRunwaysLoading && (
+                          <div className="loading-placeholder-lines" aria-hidden="true">
+                            <span />
+                            <span />
+                            <span />
+                          </div>
+                        )}
                         {!selectedMapAirportRunwaysLoading && selectedMapAirportRunwaysError && <p className="map-airport-info-error">{selectedMapAirportRunwaysError}</p>}
                         {!selectedMapAirportRunwaysLoading && !selectedMapAirportRunwaysError && selectedMapAirportRunways.length === 0 && (
                           <p>No runway data available.</p>
@@ -2573,7 +2700,13 @@ function App() {
 
                     {selectedMapAirportTab === 'notams' && (
                       <>
-                        {selectedMapAirportNotamsLoading && <p>Loading NOTAMs…</p>}
+                        {selectedMapAirportNotamsLoading && (
+                          <div className="loading-placeholder-lines" aria-hidden="true">
+                            <span />
+                            <span />
+                            <span />
+                          </div>
+                        )}
                         {!selectedMapAirportNotamsLoading && selectedMapAirportNotamsError && <p className="map-airport-info-error">{selectedMapAirportNotamsError}</p>}
                         {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportNotams.length === 0 && (
                           <p>No nearby NOTAM/TFR advisories found.</p>
@@ -2902,6 +3035,22 @@ function App() {
 
             {error && <p className="error">{error}</p>}
             {planMapError && <p className="error">{planMapError}</p>}
+
+            <details className="map-load-telemetry" open={mapInitializing || mapTilesLoading || loading}>
+              <summary>Load timings</summary>
+              {loadTelemetry.length === 0 ? (
+                <p className="map-load-telemetry-empty">No samples yet.</p>
+              ) : (
+                <ul className="map-load-telemetry-list">
+                  {loadTelemetry.map((entry) => (
+                    <li key={entry.id} className={`map-load-telemetry-item map-load-telemetry-item-${entry.status}`}>
+                      <span className="map-load-telemetry-label">{entry.label}</span>
+                      <span className="map-load-telemetry-ms">{entry.durationMs.toFixed(0)} ms</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
           </aside>
         </div>
 

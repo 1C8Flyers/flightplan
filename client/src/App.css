@@ -393,6 +393,48 @@ th {
   height: 100%;
 }
 
+.map-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 450;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(12, 16, 24, 0.28);
+  color: #f2f6ff;
+  pointer-events: none;
+}
+
+.map-loading-overlay p {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.map-loading-spinner {
+  width: 1.45rem;
+  height: 1.45rem;
+  border-radius: 999px;
+  border: 2px solid rgba(226, 236, 255, 0.35);
+  border-top-color: rgba(226, 236, 255, 0.95);
+  animation: spin-loader 0.8s linear infinite;
+}
+
+.map-loading-spinner-small {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-width: 2px;
+}
+
+@keyframes spin-loader {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .map-search-overlay {
   position: absolute;
   top: 0.75rem;
@@ -492,6 +534,15 @@ th {
   font-size: 0.96rem;
 }
 
+.map-airport-loading-inline {
+  margin: 0 0 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  font-size: 0.76rem;
+  color: rgba(220, 231, 252, 0.96);
+}
+
 .map-airport-flight-conditions {
   margin: 0 0 0.45rem;
   border-radius: 8px;
@@ -562,6 +613,44 @@ th {
 .map-airport-tab-content p {
   margin: 0.2rem 0;
   font-size: 0.84rem;
+}
+
+.loading-placeholder-lines {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0.2rem 0;
+}
+
+.loading-placeholder-lines span {
+  display: block;
+  height: 0.72rem;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(142, 159, 192, 0.3) 0%,
+    rgba(197, 212, 241, 0.48) 50%,
+    rgba(142, 159, 192, 0.3) 100%
+  );
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.05s ease-in-out infinite;
+}
+
+.loading-placeholder-lines span:nth-child(2) {
+  width: 82%;
+}
+
+.loading-placeholder-lines span:nth-child(3) {
+  width: 68%;
+}
+
+@keyframes loading-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .map-airport-info-list {
@@ -1002,6 +1091,64 @@ th {
 .map-flight-panel .error {
   color: #ffb8b8;
   margin-top: 0.35rem;
+}
+
+.map-load-telemetry {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(8, 12, 20, 0.7);
+  padding: 0.35rem 0.45rem;
+}
+
+.map-load-telemetry summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #d5e8ff;
+}
+
+.map-load-telemetry-empty {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: rgba(207, 219, 241, 0.9);
+}
+
+.map-load-telemetry-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.map-load-telemetry-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  border-radius: 6px;
+  padding: 0.18rem 0.3rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.map-load-telemetry-item-ok {
+  color: #d9e9ff;
+}
+
+.map-load-telemetry-item-error {
+  color: #ffb8b8;
+}
+
+.map-load-telemetry-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-load-telemetry-ms {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 980px) {
