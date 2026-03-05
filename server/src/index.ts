@@ -4,6 +4,7 @@ import express from 'express'
 import { createRequire } from 'module'
 import { parseStringPromise } from 'xml2js'
 import { z } from 'zod'
+import { registerAiRoutes } from './routes/ai.js'
 import { registerDiagramRoutes } from './routes/diagram.js'
 
 const require = createRequire(import.meta.url)
@@ -2740,6 +2741,8 @@ registerDiagramRoutes(app, {
   fetchAirportsDataset,
   fetchRunwaysDataset
 })
+
+registerAiRoutes(app)
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`)

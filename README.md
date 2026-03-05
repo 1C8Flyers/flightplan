@@ -42,6 +42,22 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 	- Planner map Layers menu: `Airport Diagrams`
 	- Planner map Layers menu: `Schematic Surface Layout (Approx.)` (enabled only when diagrams are on)
 
+### AI Service API
+
+- `POST /api/ai/metar/explain`
+	- Request body: `{ "metar": "KRFD051653Z 18012KT 10SM FEW035 18/10 A3012" }`
+	- Response: `{ "summary": "...", "notes": "..." }`
+- `POST /api/ai/airport/brief`
+	- Request body: `{ "airportData": { ... } }`
+	- Response: `{ "summary": "...", "notes": "..." }`
+- `POST /api/ai/airspace/explain`
+	- Request body: `{ "airspaceData": { ... } }`
+	- Response: `{ "summary": "...", "notes": "..." }`
+
+Notes:
+- AI calls are server-side only; API keys are never exposed to the frontend.
+- Responses are JSON-validated and include fallback output on upstream AI failures.
+
 ## Stack
 
 - Frontend: React + TypeScript + Vite
@@ -77,6 +93,12 @@ VITE_FAA_IFRLOW_TILE_URL=REPLACE_WITH_FAA_IFRLOW_TILE_ENDPOINT
 ```
 
 After updating env vars, restart the frontend dev server.
+
+Create `server/.env`:
+
+```bash
+OPENAI_API_KEY=REPLACE_WITH_OPENAI_API_KEY
+```
 
 ## Build
 

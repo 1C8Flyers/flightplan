@@ -1,3 +1,7 @@
 node_modules
 server/dist
 client/dist
+.env
+.env.*
+!.env.docker.example
+!server/.env.example
