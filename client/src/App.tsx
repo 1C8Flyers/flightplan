@@ -400,6 +400,7 @@ function computeLegs(
 function App() {
   const fallbackWindDir = 270
   const fallbackWindSpeed = 15
+  const defaultLocationZoom = 10
   const cruiseAltitudeOptions = [3000, 6000, 6500, 9000, 12000, 18000, 24000]
 
   const [departure, setDeparture] = useState('')
@@ -463,7 +464,9 @@ function App() {
   const [selectedMapAirportNotams, setSelectedMapAirportNotams] = useState<AirportNotamsResponse['notams']>([])
   const [selectedMapAirportNotamsLoading, setSelectedMapAirportNotamsLoading] = useState(false)
   const [selectedMapAirportNotamsError, setSelectedMapAirportNotamsError] = useState<string | null>(null)
+  const [showFaaCharts, setShowFaaCharts] = useState(true)
   const [showTfrOverlay, setShowTfrOverlay] = useState(true)
+  const [layerControlOpen, setLayerControlOpen] = useState(false)
   const [planLayerId, setPlanLayerId] = useState(() => {
     if (typeof window === 'undefined') {
       return defaultFaaChartLayerId
@@ -496,6 +499,7 @@ function App() {
   const recalcRequestIdRef = useRef(0)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapSearchContainerRef = useRef<HTMLDivElement | null>(null)
+  const layerControlRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const baseLayerRef = useRef<any>(null)
   const chartLayerRef = useRef<any>(null)
@@ -742,6 +746,13 @@ function App() {
   useEffect(() => {
     function handleDocumentPointerDown(event: MouseEvent) {
       if (!mapSearchContainerRef.current) {
+        if (
+          layerControlRef.current &&
+          event.target instanceof Node &&
+          !layerControlRef.current.contains(event.target)
+        ) {
+          setLayerControlOpen(false)
+        }
         return
       }
 
@@ -750,6 +761,14 @@ function App() {
       }
 
       setMapAirportSearchFocused(false)
+
+      if (
+        layerControlRef.current &&
+        event.target instanceof Node &&
+        !layerControlRef.current.contains(event.target)
+      ) {
+        setLayerControlOpen(false)
+      }
     }
 
     document.addEventListener('mousedown', handleDocumentPointerDown)
@@ -934,7 +953,7 @@ function App() {
         setUserLocation(location)
 
         if (mapRef.current) {
-          mapRef.current.setView([location.lat, location.lon], Math.max(selectedPlanLayer.minZoom, 8))
+          mapRef.current.setView([location.lat, location.lon], Math.max(selectedPlanLayer.minZoom, defaultLocationZoom))
         }
 
         setPlanMapError(null)
@@ -1755,6 +1774,10 @@ function App() {
         return
       }
 
+      const maxInteractiveZoom = showFaaCharts
+        ? selectedPlanLayer.maxZoom
+        : Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom)
+
       setPlanMapError(null)
 
       if (!mapRef.current) {
@@ -1762,7 +1785,7 @@ function App() {
           center: [39.5, -98.35],
           zoom: selectedPlanLayer.minZoom,
           minZoom: selectedPlanLayer.minZoom,
-          maxZoom: selectedPlanLayer.maxZoom,
+          maxZoom: maxInteractiveZoom,
           zoomControl: false,
           attributionControl: true
         })
@@ -1803,7 +1826,7 @@ function App() {
       const map = mapRef.current
       map.invalidateSize()
       map.setMinZoom(selectedPlanLayer.minZoom)
-      map.setMaxZoom(selectedPlanLayer.maxZoom)
+      map.setMaxZoom(maxInteractiveZoom)
 
       let switchedToFallbackLayer = false
 
@@ -1816,17 +1839,6 @@ function App() {
           map.removeLayer(chartLayerRef.current)
           chartLayerRef.current = null
         }
-
-        const fallbackLayer = leaflet.tileLayer(selectedBaseMap.tileUrl, {
-          minZoom: selectedPlanLayer.minZoom,
-          maxZoom: Math.max(selectedPlanLayer.maxZoom, selectedBaseMap.maxZoom),
-          attribution: selectedBaseMap.attribution,
-          detectRetina: true
-        })
-
-        fallbackLayer.addTo(map)
-        fallbackLayer.setZIndex(0)
-        chartLayerRef.current = fallbackLayer
 
         if (message) {
           setPlanMapError(message)
@@ -1852,71 +1864,72 @@ function App() {
       baseLayer.setZIndex(0)
       baseLayerRef.current = baseLayer
 
-      if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
+      if (!showFaaCharts) {
+        chartLayerRef.current = null
+      } else if (!selectedPlanLayer.tileUrl || selectedPlanLayer.tileUrl.startsWith('REPLACE_WITH_')) {
         applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
-        return
+      } else {
+        const BlobTileLayer = (leaflet as any).GridLayer.extend({
+          createTile(coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) {
+            const tile = document.createElement('img')
+            tile.alt = ''
+            tile.setAttribute('role', 'presentation')
+
+            const tileUrl = selectedPlanLayer.tileUrl
+              .replace('{z}', String(coords.z))
+              .replace('{x}', String(coords.x))
+              .replace('{y}', String(coords.y))
+
+            fetch(tileUrl)
+              .then((response) => {
+                if (!response.ok) {
+                  throw new Error(`Tile request failed (${response.status})`)
+                }
+
+                return response.blob()
+              })
+              .then((blob) => {
+                const objectUrl = URL.createObjectURL(blob)
+
+                tile.onload = () => {
+                  URL.revokeObjectURL(objectUrl)
+                  done(null, tile)
+                }
+
+                tile.onerror = () => {
+                  URL.revokeObjectURL(objectUrl)
+                  done(new Error('Tile image decode failed.'), tile)
+                }
+
+                tile.src = objectUrl
+              })
+              .catch((error) => {
+                done(error as Error, tile)
+              })
+
+            return tile
+          }
+        })
+
+        const tileLayer = new BlobTileLayer({
+          minZoom: selectedPlanLayer.minZoom,
+          maxZoom: selectedPlanLayer.maxZoom,
+          minNativeZoom: selectedPlanLayer.minNativeZoom,
+          maxNativeZoom: selectedPlanLayer.maxZoom,
+          attribution: selectedPlanLayer.attribution
+        })
+
+        tileLayer.on('tileerror', () => {
+          if (!switchedToFallbackLayer) {
+            switchedToFallbackLayer = true
+            applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
+          }
+        })
+
+        tileLayer.addTo(map)
+        tileLayer.setZIndex(10)
+        chartLayerRef.current = tileLayer
       }
-
-      const BlobTileLayer = (leaflet as any).GridLayer.extend({
-        createTile(coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) {
-          const tile = document.createElement('img')
-          tile.alt = ''
-          tile.setAttribute('role', 'presentation')
-
-          const tileUrl = selectedPlanLayer.tileUrl
-            .replace('{z}', String(coords.z))
-            .replace('{x}', String(coords.x))
-            .replace('{y}', String(coords.y))
-
-          fetch(tileUrl)
-            .then((response) => {
-              if (!response.ok) {
-                throw new Error(`Tile request failed (${response.status})`)
-              }
-
-              return response.blob()
-            })
-            .then((blob) => {
-              const objectUrl = URL.createObjectURL(blob)
-
-              tile.onload = () => {
-                URL.revokeObjectURL(objectUrl)
-                done(null, tile)
-              }
-
-              tile.onerror = () => {
-                URL.revokeObjectURL(objectUrl)
-                done(new Error('Tile image decode failed.'), tile)
-              }
-
-              tile.src = objectUrl
-            })
-            .catch((error) => {
-              done(error as Error, tile)
-            })
-
-          return tile
-        }
-      })
-
-      const tileLayer = new BlobTileLayer({
-        minZoom: selectedPlanLayer.minZoom,
-        maxZoom: selectedPlanLayer.maxZoom,
-        minNativeZoom: selectedPlanLayer.minNativeZoom,
-        maxNativeZoom: selectedPlanLayer.maxZoom,
-        attribution: selectedPlanLayer.attribution
-      })
-
-      tileLayer.on('tileerror', () => {
-        if (!switchedToFallbackLayer) {
-          switchedToFallbackLayer = true
-          applyFallbackTileLayer('FAA chart tiles unavailable. Showing selected base map.')
-        }
-      })
-
-      tileLayer.addTo(map)
-      tileLayer.setZIndex(10)
-      chartLayerRef.current = tileLayer
 
       if (tfrLayerRef.current) {
         map.removeLayer(tfrLayerRef.current)
@@ -1960,7 +1973,7 @@ function App() {
         }
 
         if (userLocation) {
-          map.setView([userLocation.lat, userLocation.lon], Math.max(selectedPlanLayer.minZoom, 8))
+          map.setView([userLocation.lat, userLocation.lon], Math.max(selectedPlanLayer.minZoom, defaultLocationZoom))
         }
 
         return
@@ -2237,7 +2250,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [routePoints, selectedPlanLayer, selectedBaseMap, showTfrOverlay, userLocation])
+  }, [routePoints, selectedPlanLayer, selectedBaseMap, showFaaCharts, showTfrOverlay, userLocation])
 
   useEffect(() => {
     return () => {
@@ -2537,6 +2550,58 @@ function App() {
             </div>
           )}
 
+          <div className={`map-layer-control${layerControlOpen ? ' open' : ''}`} ref={layerControlRef}>
+            <button
+              type="button"
+              className="map-layer-control-button"
+              aria-expanded={layerControlOpen}
+              aria-controls="map-layer-control-menu"
+              onClick={() => setLayerControlOpen((current) => !current)}
+            >
+              🗺 Layers
+            </button>
+
+            {layerControlOpen && (
+              <div id="map-layer-control-menu" className="map-layer-control-menu">
+                <label className="map-overlay-check">
+                  <input
+                    type="checkbox"
+                    checked={showFaaCharts}
+                    onChange={(event) => setShowFaaCharts(event.target.checked)}
+                  />
+                  🛩 FAA Charts
+                </label>
+
+                <label>
+                  🗺 Map Layer
+                  <select value={planLayerId} onChange={(event) => setPlanLayerId(event.target.value)}>
+                    {faaCharts.map((layer) => (
+                      <option key={layer.id} value={layer.id}>{layer.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  🌗 Basemap
+                  <select value={planBaseMapId} onChange={(event) => setPlanBaseMapId(event.target.value as BaseMapStyle)}>
+                    {baseMapLayers.map((baseMap) => (
+                      <option key={baseMap.id} value={baseMap.id}>{baseMap.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="map-overlay-check">
+                  <input
+                    type="checkbox"
+                    checked={showTfrOverlay}
+                    onChange={(event) => setShowTfrOverlay(event.target.checked)}
+                  />
+                  🚫 TFR Overlay
+                </label>
+              </div>
+            )}
+          </div>
+
           <aside className="map-flight-panel">
             <div className="map-flight-header">
               <h2>Flight Plan</h2>
@@ -2589,39 +2654,6 @@ function App() {
                 <input type="number" value={fuelBurn} onChange={(event) => setFuelBurn(Number(event.target.value))} />
               </label>
             </div>
-            </div>
-
-            <div className="map-flight-section">
-            <label>
-              🗺 Map Layer
-              <select value={planLayerId} onChange={(event) => setPlanLayerId(event.target.value)}>
-                {faaCharts.map((layer) => (
-                  <option key={layer.id} value={layer.id}>{layer.name}</option>
-                ))}
-              </select>
-            </label>
-            </div>
-
-            <div className="map-flight-section">
-            <label>
-              🌗 Basemap
-              <select value={planBaseMapId} onChange={(event) => setPlanBaseMapId(event.target.value as BaseMapStyle)}>
-                {baseMapLayers.map((baseMap) => (
-                  <option key={baseMap.id} value={baseMap.id}>{baseMap.name}</option>
-                ))}
-              </select>
-            </label>
-            </div>
-
-            <div className="map-flight-section">
-              <label className="map-overlay-check">
-                <input
-                  type="checkbox"
-                  checked={showTfrOverlay}
-                  onChange={(event) => setShowTfrOverlay(event.target.checked)}
-                />
-                🚫 TFR Overlay
-              </label>
             </div>
 
             <div className="map-flight-section">

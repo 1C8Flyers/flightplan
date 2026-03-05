@@ -18,8 +18,8 @@ export const faaCharts: FaaChartLayer[] = [
     type: 'xyz',
     tileUrl: import.meta.env.VITE_FAA_VFR_TILE_URL || 'REPLACE_WITH_FAA_VFR_TILE_ENDPOINT',
     minZoom: 4,
-    minNativeZoom: 10,
-    maxZoom: 13,
+    minNativeZoom: 8,
+    maxZoom: 12,
     attribution: faaAttribution
   },
   {
@@ -29,7 +29,7 @@ export const faaCharts: FaaChartLayer[] = [
     tileUrl: import.meta.env.VITE_FAA_TAC_TILE_URL || 'REPLACE_WITH_FAA_TAC_TILE_ENDPOINT',
     minZoom: 4,
     minNativeZoom: 10,
-    maxZoom: 14,
+    maxZoom: 12,
     attribution: faaAttribution
   },
   {
@@ -38,7 +38,7 @@ export const faaCharts: FaaChartLayer[] = [
     type: 'xyz',
     tileUrl: import.meta.env.VITE_FAA_IFRLOW_TILE_URL || 'REPLACE_WITH_FAA_IFRLOW_TILE_ENDPOINT',
     minZoom: 4,
-    minNativeZoom: 9,
+    minNativeZoom: 7,
     maxZoom: 12,
     attribution: faaAttribution
   }
