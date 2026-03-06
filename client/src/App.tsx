@@ -478,15 +478,6 @@ function App() {
   const [includedNavaidTypes, setIncludedNavaidTypes] = useState<string[]>(['VOR', 'VOR-DME'])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showRawWeather, setShowRawWeather] = useState(false)
-  const [showAdvancedNav, setShowAdvancedNav] = useState(false)
-  const [showFaaDelayDetails, setShowFaaDelayDetails] = useState(false)
-  const [reviewChecklist, setReviewChecklist] = useState({
-    weatherBriefed: false,
-    fuelChecked: false,
-    alternatesReviewed: false,
-    notamsReviewed: false
-  })
 
   const [depAirport, setDepAirport] = useState<AirportResponse | null>(null)
   const [arrAirport, setArrAirport] = useState<AirportResponse | null>(null)
@@ -494,8 +485,6 @@ function App() {
   const [arrWeather, setArrWeather] = useState<WeatherResponse | null>(null)
   const [depFrequencies, setDepFrequencies] = useState<FrequencyResponse['frequencies']>([])
   const [arrFrequencies, setArrFrequencies] = useState<FrequencyResponse['frequencies']>([])
-  const [suggestedWaypoints, setSuggestedWaypoints] = useState<SuggestedWaypoint[]>([])
-  const [windsAloft, setWindsAloft] = useState<WindsAloftResponse | null>(null)
   const [legs, setLegs] = useState<Leg[]>([])
   const [printableDiagrams, setPrintableDiagrams] = useState<PrintableDiagram[]>([])
   const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
@@ -602,7 +591,6 @@ function App() {
     return { totalDistance, totalTime, totalFuel }
   }, [legs])
 
-  const hasNavData = Boolean(legs.length > 0 && depAirport && arrAirport)
   const waypointLines = useMemo(
     () => waypointsInput.split('\n').map((line) => line.trim()).filter(Boolean),
     [waypointsInput]
@@ -622,12 +610,6 @@ function App() {
   const selectedMapAirportMetarForAi = normalizeMetarForAi(selectedMapAirportWeather?.metar?.rawOb)
   const selectedMapAirportTafForBrief = normalizeTafForBrief(selectedMapAirportWeather?.taf?.rawTAF)
   const selectedMapAirportMosForBrief = hasMosGuidance(selectedMapAirportWeather?.mos) ? selectedMapAirportWeather?.mos ?? null : null
-  const depMetarForAi = normalizeMetarForAi(depWeather?.metar?.rawOb)
-  const depTafForBrief = normalizeTafForBrief(depWeather?.taf?.rawTAF)
-  const depMosForBrief = hasMosGuidance(depWeather?.mos) ? depWeather?.mos ?? null : null
-  const arrMetarForAi = normalizeMetarForAi(arrWeather?.metar?.rawOb)
-  const arrTafForBrief = normalizeTafForBrief(arrWeather?.taf?.rawTAF)
-  const arrMosForBrief = hasMosGuidance(arrWeather?.mos) ? arrWeather?.mos ?? null : null
   const selectedMapAirportAirspace = useMemo<AirportNotam | null>(
     () => selectedMapAirportNotams.find((notam) => notam.id === selectedMapAirspaceId) ?? null,
     [selectedMapAirportNotams, selectedMapAirspaceId]
@@ -1267,15 +1249,6 @@ function App() {
     })
   }
 
-  function useSuggestedWaypointLines() {
-    if (!suggestedWaypoints.length) {
-      return
-    }
-
-    const lines = suggestedWaypoints.map((waypoint) => waypoint.ident)
-    setWaypointLines(lines)
-  }
-
   async function syncRouteFromWaypointLines(lines: string[]) {
     if (!depAirport || !arrAirport) {
       return
@@ -1898,8 +1871,6 @@ function App() {
         return
       }
 
-      setWindsAloft(midpointWinds)
-
       const resolvedWindDir = midpointWinds.direction ?? fallbackWindDir
       const resolvedWindSpeed = midpointWinds.speed || fallbackWindSpeed
 
@@ -1990,7 +1961,6 @@ function App() {
       setArrWeather(arrWeatherResponse)
       setDepFrequencies(depFrequencyResponse.frequencies)
       setArrFrequencies(arrFrequencyResponse.frequencies)
-      setSuggestedWaypoints(suggestionResponse.suggestions)
 
       await loadPrintableDiagrams(depAirportResponse, arrAirportResponse)
 
@@ -2039,20 +2009,9 @@ function App() {
         loadRouteNavaids(points)
       ])
 
-      setShowRawWeather(false)
-      setShowAdvancedNav(false)
-      setShowFaaDelayDetails(false)
-      setReviewChecklist({
-        weatherBriefed: false,
-        fuelChecked: false,
-        alternatesReviewed: false,
-        notamsReviewed: false
-      })
     } catch (caughtError) {
       setError((caughtError as Error).message)
       setLegs([])
-      setSuggestedWaypoints([])
-      setWindsAloft(null)
       setPrintableDiagrams([])
       setDepFrequencies([])
       setArrFrequencies([])
@@ -3392,313 +3351,7 @@ function App() {
           </aside>
         </div>
 
-        <p>
-          Drag blue waypoint markers to edit existing waypoints, or drag the red route line to insert a new waypoint. Start/end markers stay fixed to departure/arrival airports.
-        </p>
       </section>
-
-      {hasNavData && depAirport && arrAirport && (
-        <section className="card screen-only summary-card">
-          <p>
-            {depAirport.airport.icao} → {arrAirport.airport.icao}
-            {' · '}TAS {tas} kt
-            {' · '}Cruise {cruiseAltitudeFt} ft
-            {' · '}Total {totals.totalDistance.toFixed(1)} NM / {totals.totalTime.toFixed(1)} min / {totals.totalFuel.toFixed(2)} gal
-          </p>
-        </section>
-      )}
-
-      {suggestedWaypoints.length > 0 && (
-        <section className="card screen-only">
-          <h2>Suggested Enroute Waypoints</h2>
-          <p className="subtitle">Real airport checkpoints near your route corridor.</p>
-          <div className="suggested-list">
-            {suggestedWaypoints.map((waypoint) => (
-              <div key={waypoint.ident} className="suggested-item">
-                <strong>{waypoint.ident}</strong>
-                <span>{waypoint.name}</span>
-                <span>{waypoint.crossTrackNm.toFixed(1)} NM off-route</span>
-              </div>
-            ))}
-          </div>
-          <button onClick={useSuggestedWaypointLines}>Use Suggested Waypoints</button>
-        </section>
-      )}
-
-      {windsAloft && (
-        <section className="card screen-only">
-          <h2>Winds Aloft (Live)</h2>
-          <p>
-            Station {windsAloft.station} · Requested {windsAloft.requestedAltitudeFt} ft · Forecast Level {windsAloft.selectedAltitudeFt} ft
-          </p>
-          <p>
-            Wind {windsAloft.direction == null ? 'Variable' : `${windsAloft.direction}°`} at {windsAloft.speed} kts
-            {windsAloft.temperatureC != null ? ` · Temp ${windsAloft.temperatureC}°C` : ''}
-            {` · ${windsAloft.stationDistanceNm.toFixed(1)} NM from route midpoint`}
-          </p>
-        </section>
-      )}
-
-      {hasNavData && (
-        <section className="card screen-only">
-          <h2>Review Checklist</h2>
-          <div className="review-checklist">
-            <label className="review-checkitem">
-              <input
-                type="checkbox"
-                checked={reviewChecklist.weatherBriefed}
-                onChange={(event) => setReviewChecklist((current) => ({ ...current, weatherBriefed: event.target.checked }))}
-              />
-              Weather briefing reviewed
-            </label>
-            <label className="review-checkitem">
-              <input
-                type="checkbox"
-                checked={reviewChecklist.fuelChecked}
-                onChange={(event) => setReviewChecklist((current) => ({ ...current, fuelChecked: event.target.checked }))}
-              />
-              Fuel plan verified
-            </label>
-            <label className="review-checkitem">
-              <input
-                type="checkbox"
-                checked={reviewChecklist.alternatesReviewed}
-                onChange={(event) => setReviewChecklist((current) => ({ ...current, alternatesReviewed: event.target.checked }))}
-              />
-              Alternate options reviewed
-            </label>
-            <label className="review-checkitem">
-              <input
-                type="checkbox"
-                checked={reviewChecklist.notamsReviewed}
-                onChange={(event) => setReviewChecklist((current) => ({ ...current, notamsReviewed: event.target.checked }))}
-              />
-              NOTAMs reviewed
-            </label>
-          </div>
-        </section>
-      )}
-
-      {depAirport && arrAirport && (
-        <section className="card screen-only">
-          <h2>Airport + FAA Status</h2>
-          {(depAirport.faa.hasDelay || arrAirport.faa.hasDelay) && (
-            <div className="review-actions">
-              <button type="button" className="review-toggle" onClick={() => setShowFaaDelayDetails((current) => !current)}>
-                {showFaaDelayDetails ? 'Hide FAA Delay Details' : 'Show FAA Delay Details'}
-              </button>
-            </div>
-          )}
-          <div className="columns">
-            <article>
-              <h3>{depAirport.airport.icao} — {depAirport.airport.name}</h3>
-              <p>{depAirport.airport.lat.toFixed(4)}, {depAirport.airport.lon.toFixed(4)}</p>
-              {depAirport.faa.hasDelay ? (
-                <>
-                  <p>FAA Delay: {depAirport.faa.delays.length} active</p>
-                  {showFaaDelayDetails && depAirport.faa.delays.map((delay) => (
-                    <p key={`${delay.airportCode}-${delay.reason}`}>
-                      {delay.type} {delay.minMinutes}-{delay.maxMinutes} min ({delay.reason})
-                    </p>
-                  ))}
-                </>
-              ) : (
-                <p>FAA Delay: None reported</p>
-              )}
-            </article>
-            <article>
-              <h3>{arrAirport.airport.icao} — {arrAirport.airport.name}</h3>
-              <p>{arrAirport.airport.lat.toFixed(4)}, {arrAirport.airport.lon.toFixed(4)}</p>
-              {arrAirport.faa.hasDelay ? (
-                <>
-                  <p>FAA Delay: {arrAirport.faa.delays.length} active</p>
-                  {showFaaDelayDetails && arrAirport.faa.delays.map((delay) => (
-                    <p key={`${delay.airportCode}-${delay.reason}`}>
-                      {delay.type} {delay.minMinutes}-{delay.maxMinutes} min ({delay.reason})
-                    </p>
-                  ))}
-                </>
-              ) : (
-                <p>FAA Delay: None reported</p>
-              )}
-            </article>
-          </div>
-        </section>
-      )}
-
-      {(depWeather || arrWeather) && (
-        <section className="card screen-only">
-          <h2>Weather</h2>
-          <div className="review-actions">
-            <button type="button" className="review-toggle" onClick={() => setShowRawWeather((current) => !current)}>
-              {showRawWeather ? 'Hide Raw METAR/TAF' : 'Show Raw METAR/TAF'}
-            </button>
-          </div>
-          <div className="columns weather">
-            <article>
-              <h3>{departure.toUpperCase()}</h3>
-              <p><strong>Source:</strong> {depWeather?.sourceStation ?? 'N/A'}{depWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
-              {depWeather?.fallbackUsed && depWeather.nearestReportingStation && (
-                <p><strong>Nearest station:</strong> {depWeather.nearestReportingStation.icao} · {depWeather.nearestReportingStation.name} · {depWeather.nearestReportingStation.distanceNm.toFixed(1)} NM</p>
-              )}
-              <p><strong>Decoded:</strong> {formatDecodedWeather(depWeather)}</p>
-              {showRawWeather && <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>}
-              {showRawWeather && <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>}
-              {depMetarForAi && (
-                <BriefCard
-                  title="METAR Brief"
-                  cacheKey={`metar:${depMetarForAi}`}
-                  onGenerate={() => decodeMetarBrief(depMetarForAi)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-              {depTafForBrief && (
-                <BriefCard
-                  title="TAF Brief"
-                  cacheKey={`taf:${depTafForBrief}`}
-                  onGenerate={() => decodeTafBrief(depTafForBrief)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-              {depMosForBrief && (
-                <BriefCard
-                  title="MOS Brief"
-                  cacheKey={`mos:${depMosForBrief.station ?? departure.toUpperCase()}:${depMosForBrief.mavRaw ?? ''}:${depMosForBrief.mexRaw ?? ''}:${depMosForBrief.metRaw ?? ''}`}
-                  onGenerate={() => decodeMosBrief(depMosForBrief)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-            </article>
-            <article>
-              <h3>{arrival.toUpperCase()}</h3>
-              <p><strong>Source:</strong> {arrWeather?.sourceStation ?? 'N/A'}{arrWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
-              {arrWeather?.fallbackUsed && arrWeather.nearestReportingStation && (
-                <p><strong>Nearest station:</strong> {arrWeather.nearestReportingStation.icao} · {arrWeather.nearestReportingStation.name} · {arrWeather.nearestReportingStation.distanceNm.toFixed(1)} NM</p>
-              )}
-              <p><strong>Decoded:</strong> {formatDecodedWeather(arrWeather)}</p>
-              {showRawWeather && <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>}
-              {showRawWeather && <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>}
-              {arrMetarForAi && (
-                <BriefCard
-                  title="METAR Brief"
-                  cacheKey={`metar:${arrMetarForAi}`}
-                  onGenerate={() => decodeMetarBrief(arrMetarForAi)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-              {arrTafForBrief && (
-                <BriefCard
-                  title="TAF Brief"
-                  cacheKey={`taf:${arrTafForBrief}`}
-                  onGenerate={() => decodeTafBrief(arrTafForBrief)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-              {arrMosForBrief && (
-                <BriefCard
-                  title="MOS Brief"
-                  cacheKey={`mos:${arrMosForBrief.station ?? arrival.toUpperCase()}:${arrMosForBrief.mavRaw ?? ''}:${arrMosForBrief.mexRaw ?? ''}:${arrMosForBrief.metRaw ?? ''}`}
-                  onGenerate={() => decodeMosBrief(arrMosForBrief)}
-                  autoGenerate
-                  hideActions
-                />
-              )}
-            </article>
-          </div>
-        </section>
-      )}
-
-      {legs.length > 0 && (
-        <section className="card screen-only">
-          <h2>Nav Log Legs</h2>
-          <div className="review-actions">
-            <button type="button" className="review-toggle" onClick={() => setShowAdvancedNav((current) => !current)}>
-              {showAdvancedNav ? 'Show Compact View' : 'Show Advanced Nav Math'}
-            </button>
-          </div>
-
-          {showAdvancedNav ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>From</th>
-                  <th>To</th>
-                  <th>Dist (NM)</th>
-                  <th>TC</th>
-                  <th>Var</th>
-                  <th>Wind</th>
-                  <th>WCA</th>
-                  <th>TH</th>
-                  <th>MH</th>
-                  <th>CH</th>
-                  <th>GS</th>
-                  <th>ETE (min)</th>
-                  <th>Fuel (gal)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {legs.map((leg) => (
-                  <tr key={`${leg.from}-${leg.to}`}>
-                    <td>{leg.from} ({leg.fromLat.toFixed(4)}, {leg.fromLon.toFixed(4)})</td>
-                    <td>{leg.to} ({leg.toLat.toFixed(4)}, {leg.toLon.toFixed(4)})</td>
-                    <td>{leg.distanceNm.toFixed(1)}</td>
-                    <td>{leg.trueCourse.toFixed(0)}°</td>
-                    <td>{leg.magneticVariation.toFixed(1)}°</td>
-                    <td>{leg.windDirection == null ? 'VRB' : `${leg.windDirection}°`}/{leg.windSpeed} ({leg.windStation})</td>
-                    <td>{leg.windCorrection.toFixed(0)}°</td>
-                    <td>{leg.trueHeading.toFixed(0)}°</td>
-                    <td>{leg.magneticHeading.toFixed(0)}°</td>
-                    <td>{leg.compassHeading.toFixed(0)}°</td>
-                    <td>{leg.groundSpeed.toFixed(0)}</td>
-                    <td>{leg.eteMinutes.toFixed(1)}</td>
-                    <td>{leg.fuelGallons.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Leg</th>
-                  <th>Route</th>
-                  <th>CH</th>
-                  <th>Dist (NM)</th>
-                  <th>GS</th>
-                  <th>ETE (min)</th>
-                  <th>Fuel (gal)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {legs.map((leg, index) => (
-                  <tr key={`compact-${leg.from}-${leg.to}`}>
-                    <td>{index + 1}</td>
-                    <td>{leg.from} → {leg.to}</td>
-                    <td>{leg.compassHeading.toFixed(0)}°</td>
-                    <td>{leg.distanceNm.toFixed(1)}</td>
-                    <td>{leg.groundSpeed.toFixed(0)}</td>
-                    <td>{leg.eteMinutes.toFixed(1)}</td>
-                    <td>{leg.fuelGallons.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          <p className="totals">
-            Total Distance: {totals.totalDistance.toFixed(1)} NM · Total Time: {totals.totalTime.toFixed(1)} min · Total Fuel: {totals.totalFuel.toFixed(2)} gal
-          </p>
-          <p className="legend">
-            TVMDC quick check: Magnetic = True − Variation, Compass = Magnetic − Deviation.
-            Enter East as positive and West as negative.
-          </p>
-        </section>
-      )}
 
       {legs.length > 0 && depAirport && arrAirport && (
         <section className="card print-packet">

@@ -24,12 +24,6 @@
   pointer-events: none;
 }
 
-.subtitle {
-  margin-top: -0.5rem;
-  margin-bottom: 1.2rem;
-  color: #333;
-}
-
 .card {
   background: #ffffff;
   border: 1px solid #d3d3d3;
@@ -108,15 +102,6 @@ button {
   cursor: not-allowed;
 }
 
-.summary-card {
-  padding: 0.7rem 1rem;
-}
-
-.summary-card p {
-  margin: 0;
-  font-weight: 600;
-}
-
 details > summary {
   cursor: pointer;
   margin-bottom: 0.6rem;
@@ -136,21 +121,6 @@ details > summary {
 
 .map-airport-info p {
   margin: 0.2rem 0;
-}
-
-.review-actions {
-  margin-bottom: 0.65rem;
-}
-
-.review-toggle {
-  background: #eceff5;
-  color: #1d2b46;
-  border: 1px solid #c9d5eb;
-  font-weight: 600;
-}
-
-.review-toggle:hover {
-  background: #dfe7f7;
 }
 
 .review-checklist {
@@ -304,16 +274,6 @@ button:disabled {
   font-weight: 600;
 }
 
-.columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-
-.weather p {
-  margin: 0.35rem 0;
-}
-
 table {
   width: 100%;
   border-collapse: collapse;
@@ -331,35 +291,8 @@ th {
   background: #f3f7ff;
 }
 
-.totals {
-  margin-top: 0.8rem;
-  font-weight: 600;
-}
-
-.legend {
-  margin-top: 0.45rem;
-  font-size: 0.9rem;
-  color: #2f2f2f;
-}
-
 .error {
   color: #b00020;
-}
-
-.suggested-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.6rem;
-  margin-bottom: 0.8rem;
-}
-
-.suggested-item {
-  border: 1px solid #d9d9d9;
-  border-radius: 8px;
-  padding: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
 }
 
 .sectional-frame {
