@@ -73,6 +73,7 @@ type AirportRecord = {
   isoRegion: string | null
   lat: number
   lon: number
+  elevationFt: number | null
   type: string
   isoCountry: string
   iataCode: string | null
@@ -595,6 +596,7 @@ async function fetchAirportsDataset() {
     const state = line.slice(48, 50).trim().toUpperCase()
     const latText = line.slice(523, 538)
     const lonText = line.slice(550, 565)
+    const elevationFt = parseAirportElevationFtFromAptLine(line)
 
     const lat = parseDmsCoordinate(latText)
     const lon = parseDmsCoordinate(lonText)
@@ -610,6 +612,7 @@ async function fetchAirportsDataset() {
       isoRegion: state ? `US-${state}` : null,
       lat,
       lon,
+      elevationFt,
       type: 'small_airport',
       isoCountry: 'US',
       iataCode: null,
@@ -620,6 +623,16 @@ async function fetchAirportsDataset() {
 
   airportCache = { loadedAt: Date.now(), effectiveDate: cycle.effectiveDate, airports }
   return airports
+}
+
+function parseAirportElevationFtFromAptLine(line: string) {
+  const match = line.match(/[EW]\s*([+-]?\d+(?:\.\d+)?)S\d{2}[EW]\d{4}/)
+  if (!match) {
+    return null
+  }
+
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function normalizeSearchText(value: string) {
@@ -1916,7 +1929,7 @@ app.get('/api/airport/nearest', async (req, res) => {
         name: station?.site ?? dataset?.name,
         lat: station?.lat ?? dataset?.lat,
         lon: station?.lon ?? dataset?.lon,
-        elevationMeters: station?.elev ?? null,
+        elevationMeters: station?.elev ?? (dataset?.elevationFt == null ? null : dataset.elevationFt * 0.3048),
         state: station?.state ?? (dataset?.isoRegion?.startsWith('US-') ? dataset.isoRegion.slice(3) : null),
         country: station?.country ?? dataset?.isoCountry ?? null
       },
@@ -1962,7 +1975,7 @@ app.get('/api/airport/:icao', async (req, res) => {
         name: station?.site ?? dataset?.name ?? resolved.inputCode,
         lat: station?.lat ?? dataset?.lat ?? 0,
         lon: station?.lon ?? dataset?.lon ?? 0,
-        elevationMeters: station?.elev ?? null,
+        elevationMeters: station?.elev ?? (dataset?.elevationFt == null ? null : dataset.elevationFt * 0.3048),
         state: station?.state ?? (dataset?.isoRegion?.startsWith('US-') ? dataset.isoRegion.slice(3) : null),
         country: station?.country ?? dataset?.isoCountry ?? null
       },
