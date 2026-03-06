@@ -1488,7 +1488,7 @@ function App() {
       .map((layer) => layer.base as number)
       .reduce<number | null>((lowest, base) => (lowest == null || base < lowest ? base : lowest), null)
 
-    const ceilingPart = lowestCeilingFt == null ? '' : ` · CIG ${lowestCeilingFt.toLocaleString()} ft`
+    const ceilingPart = lowestCeilingFt == null ? '' : ` · Ceiling ${lowestCeilingFt.toLocaleString()} ft`
 
     return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}${ceilingPart}`
   }
