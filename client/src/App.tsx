@@ -741,6 +741,8 @@ function App() {
   const [arrWeather, setArrWeather] = useState<WeatherResponse | null>(null)
   const [depFrequencies, setDepFrequencies] = useState<FrequencyResponse['frequencies']>([])
   const [arrFrequencies, setArrFrequencies] = useState<FrequencyResponse['frequencies']>([])
+  const [depRunways, setDepRunways] = useState<RunwayResponse['runways']>([])
+  const [arrRunways, setArrRunways] = useState<RunwayResponse['runways']>([])
   const [legs, setLegs] = useState<Leg[]>([])
   const [printableDiagrams, setPrintableDiagrams] = useState<PrintableDiagram[]>([])
   const [printDiagramsLoading, setPrintDiagramsLoading] = useState(false)
@@ -1935,7 +1937,7 @@ function App() {
           }
 
           return {
-            chartName: 'Map-generated runway diagram',
+            chartName: 'Airport Diagram',
             imageUrl
           }
         } catch {
@@ -2241,13 +2243,24 @@ function App() {
       const depIcao = departure.trim().toUpperCase()
       const arrIcao = arrival.trim().toUpperCase()
 
-      const [depAirportResponse, arrAirportResponse, depWeatherResponse, arrWeatherResponse, depFrequencyResponse, arrFrequencyResponse] = await Promise.all([
+      const [
+        depAirportResponse,
+        arrAirportResponse,
+        depWeatherResponse,
+        arrWeatherResponse,
+        depFrequencyResponse,
+        arrFrequencyResponse,
+        depRunwayResponse,
+        arrRunwayResponse
+      ] = await Promise.all([
         fetchJson<AirportResponse>(`/api/airport/${depIcao}`),
         fetchJson<AirportResponse>(`/api/airport/${arrIcao}`),
         fetchJson<WeatherResponse>(`/api/weather/${depIcao}`),
         fetchJson<WeatherResponse>(`/api/weather/${arrIcao}`),
         fetchJson<FrequencyResponse>(`/api/frequencies/${depIcao}`),
-        fetchJson<FrequencyResponse>(`/api/frequencies/${arrIcao}`)
+        fetchJson<FrequencyResponse>(`/api/frequencies/${arrIcao}`),
+        fetchJson<RunwayResponse>(`/api/runways/${depIcao}`),
+        fetchJson<RunwayResponse>(`/api/runways/${arrIcao}`)
       ])
 
       const suggestionResponse = await fetchJson<{ suggestions: SuggestedWaypoint[] }>(
@@ -2260,6 +2273,8 @@ function App() {
       setArrWeather(arrWeatherResponse)
       setDepFrequencies(depFrequencyResponse.frequencies)
       setArrFrequencies(arrFrequencyResponse.frequencies)
+      setDepRunways(depRunwayResponse.runways)
+      setArrRunways(arrRunwayResponse.runways)
 
       await loadPrintableDiagrams(depAirportResponse, arrAirportResponse)
 
@@ -2314,6 +2329,8 @@ function App() {
       setPrintableDiagrams([])
       setDepFrequencies([])
       setArrFrequencies([])
+      setDepRunways([])
+      setArrRunways([])
       setRouteNavaids([])
       setRoutePoints([])
     } finally {
@@ -3767,22 +3784,87 @@ function App() {
           )}
 
           <div className="print-charts-grid charts-two-up">
-            {printableDiagrams.map((chart) => (
-              <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
-                <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
-                <p>{chart.chartName}{chart.source === 'generated' ? ' (fallback)' : ''}</p>
-                {chart.imageUrl ? (
-                  <img src={chart.imageUrl} alt={`${chart.role} airport diagram for ${chart.airportIcao}`} className="print-diagram-image" />
-                ) : (
-                  <p>{chart.pdfUrl ? 'Diagram preview unavailable.' : 'Diagram preview unavailable for generated fallback.'}</p>
-                )}
-                {chart.pdfUrl && (
-                  <p className="screen-only">
-                    <a href={chart.pdfUrl} target="_blank" rel="noreferrer">Open full PDF</a>
-                  </p>
-                )}
-              </article>
-            ))}
+            {printableDiagrams.map((chart) => {
+              const diagramFrequencies = chart.airportIcao === depAirport.airport.icao
+                ? depFrequencies.slice(0, 8)
+                : chart.airportIcao === arrAirport.airport.icao
+                  ? arrFrequencies.slice(0, 8)
+                  : []
+              const diagramRunways = chart.airportIcao === depAirport.airport.icao
+                ? depRunways.slice(0, 8)
+                : chart.airportIcao === arrAirport.airport.icao
+                  ? arrRunways.slice(0, 8)
+                  : []
+
+              return (
+                <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
+                  <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
+                  <p>{chart.chartName}</p>
+                  {chart.source === 'generated' && (
+                    <p className="print-diagram-disclaimer">
+                      Generated from FAA NASR runway/taxiway data; not an official FAA airport diagram.
+                    </p>
+                  )}
+                  {chart.imageUrl ? (
+                    <img src={chart.imageUrl} alt={`${chart.role} airport diagram for ${chart.airportIcao}`} className="print-diagram-image" />
+                  ) : (
+                    <p>{chart.pdfUrl ? 'Diagram preview unavailable.' : 'Diagram preview unavailable for generated fallback.'}</p>
+                  )}
+
+                  {diagramFrequencies.length > 0 && (
+                    <div className="print-diagram-frequencies">
+                      <p className="print-diagram-frequencies-title">Airport Frequencies</p>
+                      <ul className="freq-list">
+                        {diagramFrequencies.map((frequency) => (
+                          <li key={`${chart.airportIcao}-${frequency.type}-${frequency.frequencyMHz}`}>
+                            {formatFrequencyType(frequency.type, frequency.description)}: {frequency.frequencyMHz}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {diagramRunways.length > 0 && (
+                    <div className="print-diagram-runways">
+                      <p className="print-diagram-runways-title">Runway Data</p>
+                      <table className="print-runway-data-table">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Length</th>
+                            <th>Width</th>
+                            <th>Type</th>
+                            <th>Condition</th>
+                            <th>Lights</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {diagramRunways.map((runway) => {
+                            const runwayId = [runway.leIdent, runway.heIdent].filter(Boolean).join('/') || runway.id
+                            return (
+                              <tr key={`${chart.airportIcao}-${runway.id}`}>
+                                <td>{runwayId}</td>
+                                <td>{runway.lengthFt == null ? '—' : `${runway.lengthFt} ft`}</td>
+                                <td>{runway.widthFt == null ? '—' : `${runway.widthFt} ft`}</td>
+                                <td>{runway.surface ?? 'Unknown'}</td>
+                                <td>{runway.closed ? 'Closed' : 'Open'}</td>
+                                <td>{runway.lighted ? 'Lighted' : 'Unlighted'}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {chart.pdfUrl && (
+                    <p className="screen-only">
+                      <a href={chart.pdfUrl} target="_blank" rel="noreferrer">Open full PDF</a>
+                    </p>
+                  )}
+                </article>
+              )
+            })}
           </div>
         </section>
       )}
