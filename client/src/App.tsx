@@ -192,8 +192,36 @@ type PrintableDiagram = {
   role: 'Departure' | 'Arrival'
   airportIcao: string
   chartName: string
-  pdfUrl: string
+  pdfUrl: string | null
   imageUrl: string | null
+  source: 'faa' | 'generated'
+}
+
+type DiagramFeatureCollection = {
+  type: 'FeatureCollection'
+  features: Array<{
+    type: 'Feature'
+    geometry: {
+      type: string
+      coordinates: unknown
+    }
+    properties: Record<string, unknown>
+  }>
+}
+
+type GeneratedAirportDiagramResponse = {
+  airport: {
+    ident: string
+    name: string
+    arp: [number, number]
+  }
+  runways: DiagramFeatureCollection
+  runwayLabels: DiagramFeatureCollection
+  overlays: DiagramFeatureCollection
+  schematic: {
+    apron: DiagramFeatureCollection
+    taxi: DiagramFeatureCollection
+  }
 }
 
 type RouteNavaid = {
@@ -307,6 +335,234 @@ function toDeg(radians: number) {
 function normalizeHeading(degrees: number) {
   const normalized = degrees % 360
   return normalized < 0 ? normalized + 360 : normalized
+}
+
+function lonLatToMercatorPoint(lon: number, lat: number) {
+  const earthRadiusMeters = 6378137
+  const x = (lon * Math.PI * earthRadiusMeters) / 180
+  const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, lat))
+  const y = earthRadiusMeters * Math.log(Math.tan(Math.PI / 4 + (clampedLat * Math.PI) / 360))
+  return { x, y }
+}
+
+function geometryToPaths(geometry: { type: string; coordinates: unknown }) {
+  if (geometry.type === 'LineString') {
+    return [geometry.coordinates as Array<[number, number]>]
+  }
+
+  if (geometry.type === 'MultiLineString') {
+    return geometry.coordinates as Array<Array<[number, number]>>
+  }
+
+  if (geometry.type === 'Polygon') {
+    const rings = geometry.coordinates as Array<Array<[number, number]>>
+    return rings.length ? [rings[0]] : []
+  }
+
+  if (geometry.type === 'MultiPolygon') {
+    const polygons = geometry.coordinates as Array<Array<Array<[number, number]>>>
+    return polygons
+      .map((polygon) => polygon[0])
+      .filter((ring): ring is Array<[number, number]> => Boolean(ring?.length))
+  }
+
+  return []
+}
+
+function renderGeneratedDiagramToImage(diagram: GeneratedAirportDiagramResponse) {
+  const width = 1200
+  const height = 900
+  const padding = 52
+  const mercatorPoints: Array<{ x: number; y: number }> = []
+
+  const addGeometryBounds = (collection: DiagramFeatureCollection) => {
+    collection.features.forEach((feature) => {
+      const paths = geometryToPaths(feature.geometry)
+      paths.forEach((path) => {
+        path.forEach(([lon, lat]) => {
+          mercatorPoints.push(lonLatToMercatorPoint(lon, lat))
+        })
+      })
+
+      if (feature.geometry.type === 'Point') {
+        const [lon, lat] = feature.geometry.coordinates as [number, number]
+        mercatorPoints.push(lonLatToMercatorPoint(lon, lat))
+      }
+    })
+  }
+
+  addGeometryBounds(diagram.runways)
+  addGeometryBounds(diagram.overlays)
+  addGeometryBounds(diagram.schematic.apron)
+  addGeometryBounds(diagram.schematic.taxi)
+  addGeometryBounds(diagram.runwayLabels)
+
+  if (!mercatorPoints.length) {
+    return null
+  }
+
+  const minX = Math.min(...mercatorPoints.map((point) => point.x))
+  const maxX = Math.max(...mercatorPoints.map((point) => point.x))
+  const minY = Math.min(...mercatorPoints.map((point) => point.y))
+  const maxY = Math.max(...mercatorPoints.map((point) => point.y))
+
+  const spanX = Math.max(1, maxX - minX)
+  const spanY = Math.max(1, maxY - minY)
+  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY)
+
+  const project = (lon: number, lat: number) => {
+    const point = lonLatToMercatorPoint(lon, lat)
+    return {
+      x: padding + (point.x - minX) * scale,
+      y: height - (padding + (point.y - minY) * scale)
+    }
+  }
+
+  const drawPath = (
+    context: CanvasRenderingContext2D,
+    path: Array<[number, number]>,
+    options: { closePath?: boolean; fillStyle?: string; strokeStyle?: string; lineWidth?: number; dash?: number[] }
+  ) => {
+    if (!path.length) {
+      return
+    }
+
+    context.beginPath()
+    path.forEach(([lon, lat], index) => {
+      const point = project(lon, lat)
+      if (index === 0) {
+        context.moveTo(point.x, point.y)
+      } else {
+        context.lineTo(point.x, point.y)
+      }
+    })
+
+    if (options.closePath) {
+      context.closePath()
+    }
+
+    if (options.fillStyle) {
+      context.fillStyle = options.fillStyle
+      context.fill()
+    }
+
+    if (options.strokeStyle) {
+      context.setLineDash(options.dash ?? [])
+      context.strokeStyle = options.strokeStyle
+      context.lineWidth = options.lineWidth ?? 1
+      context.stroke()
+      context.setLineDash([])
+    }
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) {
+    return null
+  }
+
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+
+  diagram.schematic.apron.features.forEach((feature) => {
+    geometryToPaths(feature.geometry).forEach((path) => {
+      drawPath(context, path, {
+        closePath: true,
+        fillStyle: 'rgba(138, 167, 192, 0.18)',
+        strokeStyle: 'rgba(138, 167, 192, 0.70)',
+        lineWidth: 1.2,
+        dash: [4, 4]
+      })
+    })
+  })
+
+  diagram.schematic.taxi.features.forEach((feature) => {
+    geometryToPaths(feature.geometry).forEach((path) => {
+      drawPath(context, path, {
+        strokeStyle: 'rgba(138, 167, 192, 0.70)',
+        lineWidth: 1.3,
+        dash: [4, 4]
+      })
+    })
+  })
+
+  diagram.runways.features.forEach((feature) => {
+    const surface = String(feature.properties.surface ?? '').toUpperCase()
+    const isClosed = Boolean(feature.properties.closed)
+
+    let fillStyle = 'rgba(111, 126, 141, 0.50)'
+    let strokeStyle = 'rgba(61, 74, 91, 0.95)'
+    let dash: number[] = []
+
+    if (surface.includes('WATER')) {
+      fillStyle = 'rgba(92, 124, 160, 0.08)'
+      strokeStyle = 'rgba(92, 124, 160, 0.70)'
+    } else if (
+      surface.includes('GRAVEL') ||
+      surface.includes('TURF') ||
+      surface.includes('DIRT') ||
+      surface.includes('GRASS')
+    ) {
+      fillStyle = 'rgba(196, 176, 144, 0.30)'
+      strokeStyle = 'rgba(137, 107, 79, 0.85)'
+      dash = [6, 4]
+    }
+
+    if (isClosed) {
+      fillStyle = fillStyle.replace('0.50', '0.20').replace('0.30', '0.18').replace('0.08', '0.06')
+      strokeStyle = strokeStyle.replace('0.95', '0.55').replace('0.85', '0.55').replace('0.70', '0.50')
+    }
+
+    geometryToPaths(feature.geometry).forEach((path) => {
+      drawPath(context, path, {
+        closePath: true,
+        fillStyle,
+        strokeStyle,
+        lineWidth: 1.4,
+        dash
+      })
+    })
+  })
+
+  diagram.overlays.features.forEach((feature) => {
+    const kind = String(feature.properties.kind ?? '')
+    geometryToPaths(feature.geometry).forEach((path) => {
+      drawPath(context, path, {
+        strokeStyle: kind === 'closed-x' ? 'rgba(179, 32, 32, 0.86)' : 'rgba(201, 209, 220, 0.95)',
+        lineWidth: kind === 'closed-x' ? 2 : 1.5,
+        dash: kind === 'closed-x' ? [] : [6, 5]
+      })
+    })
+  })
+
+  context.fillStyle = '#1f2937'
+  context.font = '600 18px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+
+  diagram.runwayLabels.features.forEach((feature) => {
+    if (feature.geometry.type !== 'Point') {
+      return
+    }
+
+    const [lon, lat] = feature.geometry.coordinates as [number, number]
+    const point = project(lon, lat)
+    const text = String(feature.properties.text ?? '').trim()
+    if (!text) {
+      return
+    }
+
+    const rotationDeg = Number(feature.properties.rotationDeg ?? 0)
+    context.save()
+    context.translate(point.x, point.y)
+    context.rotate((rotationDeg * Math.PI) / 180)
+    context.fillText(text, 0, 0)
+    context.restore()
+  })
+
+  return canvas.toDataURL('image/png')
 }
 
 function normalizeMetarForAi(rawMetar: string | null | undefined) {
@@ -1663,26 +1919,69 @@ function App() {
         { role: 'Arrival' as const, airportIcao: arrAirportResponse.airport.icao }
       ]
 
-      const resolved = await Promise.all(
-        diagramCandidates.map(async (candidate) => {
-          const response = await fetchJson<AirportDiagramResponse>(`/api/airport-diagram/by-airport/${candidate.airportIcao}`)
-          if (!response.diagram) {
+      const loadGeneratedFallbackDiagram = async (airportIcao: string) => {
+        try {
+          const fallback = await fetchJson<GeneratedAirportDiagramResponse>(
+            `/api/airports/${encodeURIComponent(airportIcao)}/diagram?schematic=${showSchematicSurfaceLayout ? '1' : '0'}`
+          )
+
+          if (!fallback.runways.features.length) {
             return null
           }
 
-          const imageUrl = await renderPdfFirstPageToImage(response.diagram.proxiedPdfUrl)
+          const imageUrl = renderGeneratedDiagramToImage(fallback)
+          if (!imageUrl) {
+            return null
+          }
+
+          return {
+            chartName: 'Map-generated runway diagram',
+            imageUrl
+          }
+        } catch {
+          return null
+        }
+      }
+
+      const resolved = await Promise.all(
+        diagramCandidates.map(async (candidate) => {
+          let response: AirportDiagramResponse | null = null
+          try {
+            response = await fetchJson<AirportDiagramResponse>(`/api/airport-diagram/by-airport/${candidate.airportIcao}`)
+          } catch {
+            response = null
+          }
+
+          if (response?.diagram) {
+            const imageUrl = await renderPdfFirstPageToImage(response.diagram.proxiedPdfUrl)
+
+            return {
+              role: candidate.role,
+              airportIcao: candidate.airportIcao,
+              chartName: response.diagram.chartName,
+              pdfUrl: response.diagram.proxiedPdfUrl,
+              imageUrl,
+              source: 'faa' as const
+            }
+          }
+
+          const fallback = await loadGeneratedFallbackDiagram(candidate.airportIcao)
+          if (!fallback) {
+            return null
+          }
 
           return {
             role: candidate.role,
             airportIcao: candidate.airportIcao,
-            chartName: response.diagram.chartName,
-            pdfUrl: response.diagram.proxiedPdfUrl,
-            imageUrl
+            chartName: fallback.chartName,
+            pdfUrl: null,
+            imageUrl: fallback.imageUrl,
+            source: 'generated' as const
           }
         })
       )
 
-      setPrintableDiagrams(resolved.filter((item): item is PrintableDiagram => Boolean(item)))
+      setPrintableDiagrams(resolved.filter((item): item is NonNullable<typeof item> => item != null))
     } catch {
       setPrintableDiagrams([])
     } finally {
@@ -3471,19 +3770,17 @@ function App() {
             {printableDiagrams.map((chart) => (
               <article key={`${chart.role}-${chart.airportIcao}-${chart.chartName}`} className="print-chart-item">
                 <h4>{chart.role} Diagram - {chart.airportIcao}</h4>
-                <p>{chart.chartName}</p>
+                <p>{chart.chartName}{chart.source === 'generated' ? ' (fallback)' : ''}</p>
                 {chart.imageUrl ? (
                   <img src={chart.imageUrl} alt={`${chart.role} airport diagram for ${chart.airportIcao}`} className="print-diagram-image" />
                 ) : (
-                  <p>
-                    Diagram preview unavailable. Open full PDF:
-                    {' '}
-                    <a href={chart.pdfUrl} target="_blank" rel="noreferrer">{chart.airportIcao} airport diagram</a>
+                  <p>{chart.pdfUrl ? 'Diagram preview unavailable.' : 'Diagram preview unavailable for generated fallback.'}</p>
+                )}
+                {chart.pdfUrl && (
+                  <p className="screen-only">
+                    <a href={chart.pdfUrl} target="_blank" rel="noreferrer">Open full PDF</a>
                   </p>
                 )}
-                <p className="screen-only">
-                  <a href={chart.pdfUrl} target="_blank" rel="noreferrer">Open full PDF</a>
-                </p>
               </article>
             ))}
           </div>
