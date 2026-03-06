@@ -9,6 +9,8 @@ const FALLBACK_RESPONSE = {
 };
 const CONTEXT_ASK_DISCLAIMER = "AI-generated. Verify with official sources and pilot judgment.";
 const CONTEXT_SIZE_LIMIT_BYTES = 25 * 1024;
+const METER_WORD_REGEX = /\bmeters?\b|\bmetres?\b/i;
+const FEET_WORD_REGEX = /\bfeet\b|\bft\b/i;
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -91,6 +93,32 @@ function safeJsonParse(text) {
   } catch {
     return null;
   }
+}
+
+function hasMetricWithoutFeet(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return false;
+  }
+
+  return METER_WORD_REGEX.test(text) && !FEET_WORD_REGEX.test(text);
+}
+
+function hasUnitIssueInStructuredResponse(value) {
+  const combined = [value?.summary, value?.notes]
+    .filter((item) => typeof item === "string")
+    .join(" ");
+
+  return hasMetricWithoutFeet(combined);
+}
+
+function hasUnitIssueInContextResponse(value) {
+  const keyPoints = Array.isArray(value?.keyPoints) ? value.keyPoints.join(" ") : "";
+  const warnings = Array.isArray(value?.warnings) ? value.warnings.join(" ") : "";
+  const combined = [value?.answer, keyPoints, warnings]
+    .filter((item) => typeof item === "string")
+    .join(" ");
+
+  return hasMetricWithoutFeet(combined);
 }
 
 function truncateString(value, maxLen = 1200) {
@@ -233,9 +261,14 @@ async function generateStructured(promptFactory, payload, cacheKey) {
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
+      const basePrompt = promptFactory(payload);
+      const input = attempt === 2
+        ? `${basePrompt}\n\nCRITICAL UNIT RULE: Use US aviation units. Do not use meters unless you also include feet (ft) equivalent.`
+        : basePrompt;
+
       const completion = await openai.responses.create({
         model: MODEL,
-        input: promptFactory(payload),
+        input,
       });
 
       const rawOutput = completion.output_text ?? "";
@@ -244,6 +277,10 @@ async function generateStructured(promptFactory, payload, cacheKey) {
       const validated = normalizeStructuredResponse(parsed);
 
       if (validated) {
+        if (hasUnitIssueInStructuredResponse(validated) && attempt < 2) {
+          continue;
+        }
+
         setCache(cacheKey, validated);
         return validated;
       }
@@ -318,9 +355,14 @@ export async function askWithContext(question, context) {
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
+      const basePrompt = contextAskPrompt(payload, { strictJsonOnly: attempt === 2 });
+      const input = attempt === 2
+        ? `${basePrompt}\n\nCRITICAL UNIT RULE: Use US aviation units. Do not use meters unless you also include feet (ft) equivalent.`
+        : basePrompt;
+
       const completion = await openai.responses.create({
         model: MODEL,
-        input: contextAskPrompt(payload, { strictJsonOnly: attempt === 2 }),
+        input,
       });
 
       const rawOutput = completion.output_text ?? "";
@@ -329,6 +371,10 @@ export async function askWithContext(question, context) {
       const validated = normalizeContextAskResponse(parsed);
 
       if (validated) {
+        if (hasUnitIssueInContextResponse(validated) && attempt < 2) {
+          continue;
+        }
+
         setCache(cacheKey, validated);
         return validated;
       }
