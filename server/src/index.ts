@@ -157,6 +157,14 @@ type ResolvedAirport = {
   dataset: AirportRecord | null
 }
 
+type NearestReportingStation = {
+  icao: string
+  name: string
+  lat: number
+  lon: number
+  distanceNm: number
+}
+
 type AirportDiagram = {
   icao: string
   faa: string | null
@@ -626,7 +634,7 @@ async function fetchAirportsDataset() {
 }
 
 function parseAirportElevationFtFromAptLine(line: string) {
-  const match = line.match(/[EW]\s*([+-]?\d+(?:\.\d+)?)S\d{2}[EW]\d{4}/)
+  const match = line.match(/[EW]\s*([+-]?\d+(?:\.\d+)?)\s*[A-Z]\d{2}[EW]\d{4}/)
   if (!match) {
     return null
   }
@@ -1352,25 +1360,102 @@ async function fetchNearestReportingWeather(lat: number, lon: number) {
   const airports = await fetchAirportsDataset()
 
   const nearestStations = airports
-    .filter((airport) => Boolean(airport.gpsCode && /^[A-Z]\w{3}$/.test(airport.gpsCode)))
-    .map((airport) => ({
-      code: airport.gpsCode as string,
-      distanceNm: haversineNm(lat, lon, airport.lat, airport.lon)
-    }))
+    .map((airport) => {
+      const queryIds = new Set<string>()
+
+      for (const code of [airport.gpsCode, airport.ident, airport.localCode, airport.iataCode]) {
+        if (!code) {
+          continue
+        }
+
+        for (const candidate of getAirportCodeCandidates(code)) {
+          const normalized = candidate.trim().toUpperCase()
+          if (/^[A-Z0-9]{3,4}$/.test(normalized)) {
+            queryIds.add(normalized)
+          }
+        }
+      }
+
+      return {
+        name: airport.name,
+        lat: airport.lat,
+        lon: airport.lon,
+        distanceNm: haversineNm(lat, lon, airport.lat, airport.lon),
+        queryIds: [...queryIds]
+      }
+    })
+    .filter((airport) => airport.queryIds.length > 0)
     .sort((a, b) => a.distanceNm - b.distanceNm)
-    .slice(0, 30)
+    .slice(0, 120)
 
-  const stationIds = nearestStations.map((station) => station.code)
+  const stationIds: string[] = []
+  const seenStationIds = new Set<string>()
+  for (const station of nearestStations) {
+    for (const queryId of station.queryIds) {
+      if (seenStationIds.has(queryId)) {
+        continue
+      }
+      seenStationIds.add(queryId)
+      stationIds.push(queryId)
+    }
+  }
+
   if (!stationIds.length) {
-    return { metar: null as z.infer<typeof metarSchema> | null, taf: null as z.infer<typeof tafSchema> | null, sourceStation: null as string | null }
+    return {
+      metar: null as z.infer<typeof metarSchema> | null,
+      taf: null as z.infer<typeof tafSchema> | null,
+      sourceStation: null as string | null,
+      nearestReportingStation: null as NearestReportingStation | null
+    }
   }
 
-  const direct = await fetchWeatherFromStationIds(stationIds)
-  if (!direct.metar && !direct.taf) {
-    return direct
+  const idList = stationIds.join(',')
+  const [metarPayload, tafPayload] = await Promise.all([
+    fetchJson<unknown[]>(`https://aviationweather.gov/api/data/metar?ids=${idList}&format=json`),
+    fetchJson<unknown[]>(`https://aviationweather.gov/api/data/taf?ids=${idList}&format=json`)
+  ])
+
+  const parsedMetars = metarPayload
+    .map((item) => metarSchema.safeParse(item))
+    .filter((result) => result.success)
+    .map((result) => result.data)
+
+  const parsedTafs = tafPayload
+    .map((item) => tafSchema.safeParse(item))
+    .filter((result) => result.success)
+    .map((result) => result.data)
+
+  const metarsByIcao = new Map(parsedMetars.map((item) => [item.icaoId.toUpperCase(), item]))
+  const tafsByIcao = new Map(parsedTafs.map((item) => [String(item.icaoId ?? '').toUpperCase(), item]))
+
+  for (const station of nearestStations) {
+    for (const queryId of station.queryIds) {
+      const metar = metarsByIcao.get(queryId) ?? null
+      const taf = tafsByIcao.get(queryId) ?? null
+
+      if (metar || taf) {
+        return {
+          metar,
+          taf,
+          sourceStation: queryId,
+          nearestReportingStation: {
+            icao: queryId,
+            name: station.name,
+            lat: station.lat,
+            lon: station.lon,
+            distanceNm: Number(station.distanceNm.toFixed(1))
+          }
+        }
+      }
+    }
   }
 
-  return direct
+  return {
+    metar: null as z.infer<typeof metarSchema> | null,
+    taf: null as z.infer<typeof tafSchema> | null,
+    sourceStation: null as string | null,
+    nearestReportingStation: null as NearestReportingStation | null
+  }
 }
 
 async function findNearbyFaaWaypoint(lat: number, lon: number) {
@@ -2008,7 +2093,8 @@ app.get('/api/weather/:icao', async (req, res) => {
           metar: null,
           taf: null,
           sourceStation: null,
-          fallbackUsed: false
+          fallbackUsed: false,
+          nearestReportingStation: null
         })
         return
       }
@@ -2018,7 +2104,8 @@ app.get('/api/weather/:icao', async (req, res) => {
         metar: fallback.metar,
         taf: fallback.taf,
         sourceStation: fallback.sourceStation,
-        fallbackUsed: true
+        fallbackUsed: true,
+        nearestReportingStation: fallback.nearestReportingStation
       })
       return
     }
@@ -2030,7 +2117,8 @@ app.get('/api/weather/:icao', async (req, res) => {
         metar: primary.metar,
         taf: primary.taf,
         sourceStation: primary.sourceStation ?? weatherStation,
-        fallbackUsed: false
+        fallbackUsed: false,
+        nearestReportingStation: null
       })
       return
     }
@@ -2040,7 +2128,8 @@ app.get('/api/weather/:icao', async (req, res) => {
         metar: null,
         taf: null,
         sourceStation: weatherStation,
-        fallbackUsed: false
+        fallbackUsed: false,
+        nearestReportingStation: null
       })
       return
     }
@@ -2051,7 +2140,8 @@ app.get('/api/weather/:icao', async (req, res) => {
       metar: fallback.metar,
       taf: fallback.taf,
       sourceStation: fallback.sourceStation,
-      fallbackUsed: true
+      fallbackUsed: true,
+      nearestReportingStation: fallback.nearestReportingStation
     })
   } catch (error) {
     res.status(500).json({ error: (error as Error).message })

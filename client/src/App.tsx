@@ -88,6 +88,13 @@ type WeatherResponse = {
   taf: { rawTAF?: string; issueTime?: string } | null
   sourceStation?: string | null
   fallbackUsed?: boolean
+  nearestReportingStation?: {
+    icao: string
+    name: string
+    lat: number
+    lon: number
+    distanceNm: number
+  } | null
 }
 
 type FrequencyResponse = {
@@ -2816,6 +2823,15 @@ function App() {
                             {selectedMapAirportWeather.fallbackUsed ? ' (nearest reporting station)' : ''}
                           </p>
                         )}
+                        {selectedMapAirportWeather?.fallbackUsed && selectedMapAirportWeather.nearestReportingStation && (
+                          <p>
+                            Nearest station: {selectedMapAirportWeather.nearestReportingStation.icao}
+                            {' · '}
+                            {selectedMapAirportWeather.nearestReportingStation.name}
+                            {' · '}
+                            {selectedMapAirportWeather.nearestReportingStation.distanceNm.toFixed(1)} NM
+                          </p>
+                        )}
                         {selectedMapAirportMetarRaw && <p>METAR: {selectedMapAirportMetarRaw}</p>}
                         {selectedMapAirportWeather?.taf?.rawTAF && <p>TAF: {selectedMapAirportWeather.taf.rawTAF}</p>}
                         {selectedMapAirportMetarForAi && (
@@ -3458,6 +3474,9 @@ function App() {
             <article>
               <h3>{departure.toUpperCase()}</h3>
               <p><strong>Source:</strong> {depWeather?.sourceStation ?? 'N/A'}{depWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
+              {depWeather?.fallbackUsed && depWeather.nearestReportingStation && (
+                <p><strong>Nearest station:</strong> {depWeather.nearestReportingStation.icao} · {depWeather.nearestReportingStation.name} · {depWeather.nearestReportingStation.distanceNm.toFixed(1)} NM</p>
+              )}
               <p><strong>Decoded:</strong> {formatDecodedWeather(depWeather)}</p>
               {showRawWeather && <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>}
@@ -3473,6 +3492,9 @@ function App() {
             <article>
               <h3>{arrival.toUpperCase()}</h3>
               <p><strong>Source:</strong> {arrWeather?.sourceStation ?? 'N/A'}{arrWeather?.fallbackUsed ? ' (nearest reporting station)' : ''}</p>
+              {arrWeather?.fallbackUsed && arrWeather.nearestReportingStation && (
+                <p><strong>Nearest station:</strong> {arrWeather.nearestReportingStation.icao} · {arrWeather.nearestReportingStation.name} · {arrWeather.nearestReportingStation.distanceNm.toFixed(1)} NM</p>
+              )}
               <p><strong>Decoded:</strong> {formatDecodedWeather(arrWeather)}</p>
               {showRawWeather && <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>}
