@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 import { getCache, setCache } from "./cache.js";
-import { airspacePrompt, airportPrompt, contextAskPrompt, metarPrompt } from "./prompts.js";
+import { airspacePrompt, airportPrompt, contextAskPrompt } from "./prompts.js";
 
 const MODEL = "gpt-4.1-mini";
 const FALLBACK_RESPONSE = {
@@ -295,13 +295,6 @@ async function generateStructured(promptFactory, payload, cacheKey) {
   }
 
   return FALLBACK_RESPONSE;
-}
-
-export async function explainMetar(metar) {
-  const sanitizedMetar = String(metar ?? "").trim();
-  const cacheKey = `metar:${sanitizedMetar}`;
-
-  return generateStructured(metarPrompt, sanitizedMetar, cacheKey);
 }
 
 export async function airportBrief(airportData) {

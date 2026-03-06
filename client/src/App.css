@@ -501,7 +501,7 @@ th {
 
 .map-airport-info-overlay {
   position: absolute;
-  top: 4.1rem;
+  top: 5.95rem;
   right: 0.75rem;
   width: min(360px, calc(100% - 1.5rem));
   z-index: 610;
@@ -509,10 +509,10 @@ th {
 
 .ai-drawer {
   position: absolute;
-  top: 4.1rem;
+  top: 5.95rem;
   right: calc(min(360px, calc(100% - 1.5rem)) + 0.6rem);
   width: min(420px, calc(100% - 1.5rem));
-  max-height: calc(100% - 4.9rem);
+  max-height: calc(100% - 6.75rem);
   overflow: auto;
   border: 1px solid #4a5675;
   border-radius: 10px;
@@ -641,6 +641,12 @@ th {
   color: #f7f9ff;
   padding: 0.55rem;
   backdrop-filter: blur(2px);
+  max-height: calc(100vh - 12rem);
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .map-airport-info-header {
@@ -754,6 +760,7 @@ th {
   padding: 0.45rem 0.55rem;
   display: grid;
   gap: 0.28rem;
+  overflow-y: auto;
 }
 
 .map-airport-tab-content p {
@@ -1388,20 +1395,20 @@ th {
   }
 
   .map-search-overlay {
-    top: 0.6rem;
+    top: 0.75rem;
     right: 0.6rem;
   }
 
   .map-airport-info-overlay {
-    top: 3.95rem;
+    top: 5.55rem;
     right: 0.6rem;
   }
 
   .ai-drawer {
-    top: 3.95rem;
+    top: 5.55rem;
     right: 0.6rem;
     width: min(460px, calc(100% - 1.2rem));
-    max-height: calc(100% - 4.55rem);
+    max-height: calc(100% - 6.2rem);
   }
 
   .map-flight-inline-grid-4 {

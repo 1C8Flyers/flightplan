@@ -23,6 +23,7 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 ## Data Sources
 
 - Airport weather: `https://aviationweather.gov/api/data/*`
+- MOS guidance (MAV/MEX/MET text): `https://www.weather.gov/source/mdl/MOS/*`
 - FAA delays: `https://nasstatus.faa.gov/api/airport-status-information`
 - FAA sectionals: `https://aeronav.faa.gov/visual/*/PDFs/*.pdf`
 - FAA NASR 28-Day Subscription (airport, frequency, runway, navaid datasets): `https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription`
@@ -44,9 +45,6 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 
 ### AI Service API
 
-- `POST /api/ai/metar/explain`
-	- Request body: `{ "metar": "KRFD051653Z 18012KT 10SM FEW035 18/10 A3012" }`
-	- Response: `{ "summary": "...", "notes": "..." }`
 - `POST /api/ai/airport/brief`
 	- Request body: `{ "airportData": { ... } }`
 	- Response: `{ "summary": "...", "notes": "..." }`
@@ -55,6 +53,9 @@ A full-stack web app for pilots to build a VFR nav log using live aviation data.
 	- Response: `{ "summary": "...", "notes": "..." }`
 
 Notes:
+- METAR decoding is handled locally in the client (no AI request).
+- TAF decoding is handled locally in the client (no AI request).
+- MOS brief summaries are generated locally from server-fetched NWS MDL MOS text (MAV/MEX/MET).
 - AI calls are server-side only; API keys are never exposed to the frontend.
 - Responses are JSON-validated and include fallback output on upstream AI failures.
 

@@ -1,4 +1,8 @@
-export type AiBriefResponse = {
+import { decodeMetar } from './metarDecoder'
+import { decodeMosGuidance } from './mosDecoder'
+import { decodeTaf } from './tafDecoder'
+
+export type BriefResponse = {
   summary: string
   notes?: string
 }
@@ -7,7 +11,7 @@ type AiErrorResponse = {
   error?: string
 }
 
-async function postAiBrief(path: string, payload: Record<string, unknown>): Promise<AiBriefResponse> {
+async function postAiBrief(path: string, payload: Record<string, unknown>): Promise<BriefResponse> {
   const response = await fetch(path, {
     method: 'POST',
     headers: {
@@ -16,7 +20,7 @@ async function postAiBrief(path: string, payload: Record<string, unknown>): Prom
     body: JSON.stringify(payload)
   })
 
-  const body = await response.json().catch(() => ({})) as Partial<AiBriefResponse> & AiErrorResponse
+  const body = await response.json().catch(() => ({})) as Partial<BriefResponse> & AiErrorResponse
 
   if (!response.ok) {
     throw new Error(body.error ?? `Request failed (${response.status})`)
@@ -36,8 +40,21 @@ async function postAiBrief(path: string, payload: Record<string, unknown>): Prom
   }
 }
 
-export function explainMetar(metar: string) {
-  return postAiBrief('/api/ai/metar/explain', { metar })
+export function decodeMetarBrief(metar: string) {
+  return Promise.resolve(decodeMetar(metar))
+}
+
+export function decodeTafBrief(taf: string) {
+  return Promise.resolve(decodeTaf(taf))
+}
+
+export function decodeMosBrief(mos: unknown) {
+  return Promise.resolve(decodeMosGuidance((mos ?? {}) as {
+    station?: string | null
+    mavRaw?: string | null
+    mexRaw?: string | null
+    metRaw?: string | null
+  }))
 }
 
 export function airportBrief(airportData: unknown) {

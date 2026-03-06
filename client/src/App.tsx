@@ -3,9 +3,9 @@ import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { defaultFaaChartLayerId, faaCharts } from './config/faaCharts'
 import { AiDrawer } from './components/AiDrawer'
-import { AiBriefCard } from './components/AiBriefCard'
+import { BriefCard } from './components/BriefCard'
 import { AirportDiagramsLayer } from './map/AirportDiagramsLayer'
-import { airportBrief, explainAirspace, explainMetar } from './services/aiApi'
+import { airportBrief, decodeMetarBrief, decodeMosBrief, decodeTafBrief, explainAirspace } from './services/briefApi'
 import type { AiAskContext } from './services/aiContextApi'
 
 type BaseMapStyle = 'light' | 'dark'
@@ -84,8 +84,18 @@ type WeatherResponse = {
     wspd?: number | null
     visib?: string | null
     altim?: number | null
+    clouds?: Array<{
+      cover: string
+      base?: number | null
+    }> | null
   } | null
   taf: { rawTAF?: string; issueTime?: string } | null
+  mos?: {
+    station?: string | null
+    mavRaw?: string | null
+    mexRaw?: string | null
+    metRaw?: string | null
+  } | null
   sourceStation?: string | null
   fallbackUsed?: boolean
   nearestReportingStation?: {
@@ -310,6 +320,23 @@ function normalizeMetarForAi(rawMetar: string | null | undefined) {
     .toUpperCase()
 
   return normalized.length > 0 ? normalized : null
+}
+
+function normalizeTafForBrief(rawTaf: string | null | undefined) {
+  if (!rawTaf) {
+    return null
+  }
+
+  const normalized = rawTaf
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+
+  return normalized.length > 0 ? normalized : null
+}
+
+function hasMosGuidance(mos: WeatherResponse['mos']) {
+  return Boolean(mos && (mos.mavRaw || mos.mexRaw || mos.metRaw))
 }
 
 function escapeHtml(value: string) {
@@ -593,8 +620,14 @@ function App() {
   const selectedMapAirportIcao = selectedMapAirport?.airport.icao ?? null
   const selectedMapAirportMetarRaw = selectedMapAirportWeather?.metar?.rawOb?.trim() ?? null
   const selectedMapAirportMetarForAi = normalizeMetarForAi(selectedMapAirportWeather?.metar?.rawOb)
+  const selectedMapAirportTafForBrief = normalizeTafForBrief(selectedMapAirportWeather?.taf?.rawTAF)
+  const selectedMapAirportMosForBrief = hasMosGuidance(selectedMapAirportWeather?.mos) ? selectedMapAirportWeather?.mos ?? null : null
   const depMetarForAi = normalizeMetarForAi(depWeather?.metar?.rawOb)
+  const depTafForBrief = normalizeTafForBrief(depWeather?.taf?.rawTAF)
+  const depMosForBrief = hasMosGuidance(depWeather?.mos) ? depWeather?.mos ?? null : null
   const arrMetarForAi = normalizeMetarForAi(arrWeather?.metar?.rawOb)
+  const arrTafForBrief = normalizeTafForBrief(arrWeather?.taf?.rawTAF)
+  const arrMosForBrief = hasMosGuidance(arrWeather?.mos) ? arrWeather?.mos ?? null : null
   const selectedMapAirportAirspace = useMemo<AirportNotam | null>(
     () => selectedMapAirportNotams.find((notam) => notam.id === selectedMapAirspaceId) ?? null,
     [selectedMapAirportNotams, selectedMapAirspaceId]
@@ -1450,7 +1483,14 @@ function App() {
         ? `${(metar.altim * 0.0295299830714).toFixed(2)} inHg`
         : `${metar.altim.toFixed(2)} inHg`
 
-    return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}`
+    const lowestCeilingFt = metar.clouds
+      ?.filter((layer) => (layer.cover === 'BKN' || layer.cover === 'OVC' || layer.cover === 'VV') && layer.base != null)
+      .map((layer) => layer.base as number)
+      .reduce<number | null>((lowest, base) => (lowest == null || base < lowest ? base : lowest), null)
+
+    const ceilingPart = lowestCeilingFt == null ? '' : ` · CIG ${lowestCeilingFt.toLocaleString()} ft`
+
+    return `Wind ${windDirection} @ ${windSpeed} · Vis ${visibility} · Temp/Dew ${temperature}/${dewpoint} · Alt ${altimeter}${ceilingPart}`
   }
 
   function parseVisibilitySm(value: string | null | undefined) {
@@ -1550,17 +1590,22 @@ function App() {
     return 'VFR'
   }
 
-  function formatFrequencyType(type: string) {
+  function formatFrequencyType(type: string, description?: string) {
     const normalized = type.toUpperCase()
-    if (normalized.startsWith('ATIS') || normalized.startsWith('AWOS') || normalized.startsWith('ASOS')) return 'WX'
+    if (normalized.startsWith('ATIS') || normalized.startsWith('AWOS') || normalized.startsWith('ASOS')) return 'Weather'
     if (normalized.startsWith('CTAF')) return 'CTAF'
     if (normalized.startsWith('UNIC')) return 'UNICOM'
-    if (normalized.startsWith('TWR')) return 'TWR'
-    if (normalized.startsWith('GND')) return 'GND'
-    if (normalized.startsWith('APP')) return 'APP'
-    if (normalized.startsWith('DEP')) return 'DEP'
-    if (normalized.startsWith('CLNC')) return 'CLR'
-    if (normalized.startsWith('FSS')) return 'FSS'
+    if (normalized.startsWith('TWR')) {
+      const normalizedDescription = String(description ?? '').toUpperCase()
+      return normalizedDescription.includes('PART-TIME') ? 'Tower (Part-time)' : 'Tower'
+    }
+    if (normalized.startsWith('GND')) return 'Ground'
+    if (normalized.startsWith('APP/DEP')) return 'Approach/Departure'
+    if (normalized.startsWith('APP')) return 'Approach'
+    if (normalized.startsWith('DEP')) return 'Departure'
+    if (normalized.startsWith('CLNC')) return 'Clearance'
+    if (normalized.startsWith('RDO')) return 'Flight Service Radio'
+    if (normalized.startsWith('FSS')) return 'Flight Service'
     return normalized.slice(0, 6)
   }
 
@@ -2835,11 +2880,30 @@ function App() {
                         {selectedMapAirportMetarRaw && <p>METAR: {selectedMapAirportMetarRaw}</p>}
                         {selectedMapAirportWeather?.taf?.rawTAF && <p>TAF: {selectedMapAirportWeather.taf.rawTAF}</p>}
                         {selectedMapAirportMetarForAi && (
-                          <AiBriefCard
-                            title="AI Brief"
-                            actionLabel="Explain this METAR"
+                          <BriefCard
+                            title="METAR Brief"
                             cacheKey={`metar:${selectedMapAirportMetarForAi}`}
-                            onGenerate={() => explainMetar(selectedMapAirportMetarForAi)}
+                            onGenerate={() => decodeMetarBrief(selectedMapAirportMetarForAi)}
+                            autoGenerate
+                            hideActions
+                          />
+                        )}
+                        {selectedMapAirportTafForBrief && (
+                          <BriefCard
+                            title="TAF Brief"
+                            cacheKey={`taf:${selectedMapAirportTafForBrief}`}
+                            onGenerate={() => decodeTafBrief(selectedMapAirportTafForBrief)}
+                            autoGenerate
+                            hideActions
+                          />
+                        )}
+                        {selectedMapAirportMosForBrief && (
+                          <BriefCard
+                            title="MOS Brief"
+                            cacheKey={`mos:${selectedMapAirportMosForBrief.station ?? selectedMapAirportIcao ?? 'unknown'}:${selectedMapAirportMosForBrief.mavRaw ?? ''}:${selectedMapAirportMosForBrief.mexRaw ?? ''}:${selectedMapAirportMosForBrief.metRaw ?? ''}`}
+                            onGenerate={() => decodeMosBrief(selectedMapAirportMosForBrief)}
+                            autoGenerate
+                            hideActions
                           />
                         )}
                       </>
@@ -2862,7 +2926,7 @@ function App() {
                           ICAO/IATA/FAA: {selectedMapAirport.airport.icao} / {selectedMapAirport.airport.iata ?? '—'} / {selectedMapAirport.airport.faa ?? '—'}
                         </p>
                         {selectedMapAirportDistanceNm != null && <p>Distance from click: {selectedMapAirportDistanceNm.toFixed(1)} NM</p>}
-                        <AiBriefCard
+                        <BriefCard
                           title="AI Brief"
                           actionLabel="AI airport brief"
                           cacheKey={`airport:${selectedMapAirport.airport.icao}`}
@@ -2907,7 +2971,7 @@ function App() {
                           <ul className="map-airport-info-list">
                             {selectedMapAirportFrequencies.slice(0, 12).map((frequency) => (
                               <li key={`${frequency.type}-${frequency.description}-${frequency.frequencyMHz}`}>
-                                <strong>{formatFrequencyType(frequency.type)}</strong>
+                                <strong>{formatFrequencyType(frequency.type, frequency.description)}</strong>
                                 <span>{frequency.frequencyMHz}</span>
                                 <span>{frequency.description || frequency.type}</span>
                               </li>
@@ -3014,7 +3078,7 @@ function App() {
                         {!selectedMapAirportNotamsLoading && !selectedMapAirportNotamsError && selectedMapAirportAirspace && (
                           <div className="map-airspace-brief">
                             <p className="map-airport-info-note">Selected airspace: {selectedMapAirportAirspace.type} {selectedMapAirportAirspace.id}</p>
-                            <AiBriefCard
+                            <BriefCard
                               title="AI Brief"
                               actionLabel="Explain this airspace"
                               cacheKey={`airspace:${selectedMapAirportAirspace.id}`}
@@ -3481,11 +3545,30 @@ function App() {
               {showRawWeather && <p><strong>METAR:</strong> {depWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {depWeather?.taf?.rawTAF ?? 'N/A'}</p>}
               {depMetarForAi && (
-                <AiBriefCard
-                  title="AI Brief"
-                  actionLabel="Explain this METAR"
+                <BriefCard
+                  title="METAR Brief"
                   cacheKey={`metar:${depMetarForAi}`}
-                  onGenerate={() => explainMetar(depMetarForAi)}
+                  onGenerate={() => decodeMetarBrief(depMetarForAi)}
+                  autoGenerate
+                  hideActions
+                />
+              )}
+              {depTafForBrief && (
+                <BriefCard
+                  title="TAF Brief"
+                  cacheKey={`taf:${depTafForBrief}`}
+                  onGenerate={() => decodeTafBrief(depTafForBrief)}
+                  autoGenerate
+                  hideActions
+                />
+              )}
+              {depMosForBrief && (
+                <BriefCard
+                  title="MOS Brief"
+                  cacheKey={`mos:${depMosForBrief.station ?? departure.toUpperCase()}:${depMosForBrief.mavRaw ?? ''}:${depMosForBrief.mexRaw ?? ''}:${depMosForBrief.metRaw ?? ''}`}
+                  onGenerate={() => decodeMosBrief(depMosForBrief)}
+                  autoGenerate
+                  hideActions
                 />
               )}
             </article>
@@ -3499,11 +3582,30 @@ function App() {
               {showRawWeather && <p><strong>METAR:</strong> {arrWeather?.metar?.rawOb ?? 'N/A'}</p>}
               {showRawWeather && <p><strong>TAF:</strong> {arrWeather?.taf?.rawTAF ?? 'N/A'}</p>}
               {arrMetarForAi && (
-                <AiBriefCard
-                  title="AI Brief"
-                  actionLabel="Explain this METAR"
+                <BriefCard
+                  title="METAR Brief"
                   cacheKey={`metar:${arrMetarForAi}`}
-                  onGenerate={() => explainMetar(arrMetarForAi)}
+                  onGenerate={() => decodeMetarBrief(arrMetarForAi)}
+                  autoGenerate
+                  hideActions
+                />
+              )}
+              {arrTafForBrief && (
+                <BriefCard
+                  title="TAF Brief"
+                  cacheKey={`taf:${arrTafForBrief}`}
+                  onGenerate={() => decodeTafBrief(arrTafForBrief)}
+                  autoGenerate
+                  hideActions
+                />
+              )}
+              {arrMosForBrief && (
+                <BriefCard
+                  title="MOS Brief"
+                  cacheKey={`mos:${arrMosForBrief.station ?? arrival.toUpperCase()}:${arrMosForBrief.mavRaw ?? ''}:${arrMosForBrief.mexRaw ?? ''}:${arrMosForBrief.metRaw ?? ''}`}
+                  onGenerate={() => decodeMosBrief(arrMosForBrief)}
+                  autoGenerate
+                  hideActions
                 />
               )}
             </article>
@@ -3621,7 +3723,7 @@ function App() {
                 <ul className="freq-list">
                   {depFrequencies.slice(0, 10).map((frequency) => (
                     <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
-                      {formatFrequencyType(frequency.type)}: {frequency.frequencyMHz}
+                      {formatFrequencyType(frequency.type, frequency.description)}: {frequency.frequencyMHz}
                     </li>
                   ))}
                 </ul>
@@ -3632,7 +3734,7 @@ function App() {
                 <ul className="freq-list">
                   {arrFrequencies.slice(0, 10).map((frequency) => (
                     <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
-                      {formatFrequencyType(frequency.type)}: {frequency.frequencyMHz}
+                      {formatFrequencyType(frequency.type, frequency.description)}: {frequency.frequencyMHz}
                     </li>
                   ))}
                 </ul>

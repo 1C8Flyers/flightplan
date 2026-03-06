@@ -8,16 +8,6 @@ function jsonInstruction(payloadDescription) {
   ].join("\n");
 }
 
-export function metarPrompt(metar) {
-  return [
-    jsonInstruction('{"summary":"string","notes":"string"}'),
-    "Task: Explain this METAR for a pilot in clear, concise language.",
-    "Prefer US aviation wording and units in output (ft/SM/kt).",
-    "Include key weather implications in notes.",
-    `METAR: ${metar}`,
-  ].join("\n\n");
-}
-
 export function airportPrompt(data) {
   const serialized = JSON.stringify(data ?? {}, null, 2);
 

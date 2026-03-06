@@ -1,7 +1,6 @@
 import type { Express } from 'express'
 
 type AiServiceModule = {
-  explainMetar: (metar: string) => Promise<Record<string, unknown>>
   airportBrief: (airportData: unknown) => Promise<Record<string, unknown>>
   explainAirspace: (airspaceData: unknown) => Promise<Record<string, unknown>>
   askWithContext: (question: string, context: unknown) => Promise<Record<string, unknown>>
@@ -19,22 +18,6 @@ async function getAiService(): Promise<AiServiceModule> {
 }
 
 export function registerAiRoutes(app: Express) {
-  app.post('/api/ai/metar/explain', async (req, res) => {
-    const metar = typeof req.body?.metar === 'string' ? req.body.metar.trim() : ''
-    if (!metar) {
-      res.status(400).json({ error: 'metar is required.' })
-      return
-    }
-
-    try {
-      const { explainMetar } = await getAiService()
-      const explanation = await explainMetar(metar)
-      res.json(explanation)
-    } catch {
-      res.status(500).json({ summary: 'Unable to generate AI explanation.' })
-    }
-  })
-
   app.post('/api/ai/airport/brief', async (req, res) => {
     const airportData = req.body?.airportData
     if (!airportData || typeof airportData !== 'object' || Array.isArray(airportData)) {

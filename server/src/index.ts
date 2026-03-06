@@ -47,6 +47,11 @@ const metarSchema = z.object({
     .optional()
     .transform((value) => (value == null ? null : String(value))),
   altim: z.number().nullable().optional(),
+  cover: z.string().nullable().optional(),
+  clouds: z.array(z.object({
+    cover: z.string(),
+    base: z.number().nullable().optional()
+  })).nullable().optional(),
   lat: z.number().nullable().optional(),
   lon: z.number().nullable().optional()
 })
@@ -165,6 +170,13 @@ type NearestReportingStation = {
   distanceNm: number
 }
 
+type MosGuidance = {
+  station: string
+  mavRaw: string | null
+  mexRaw: string | null
+  metRaw: string | null
+}
+
 type AirportDiagram = {
   icao: string
   faa: string | null
@@ -192,6 +204,7 @@ let runwayCache: { loadedAt: number; effectiveDate: string; runways: RunwayRecor
 let sectionalCache: { loadedAt: number; sectionals: SectionalChart[] } | null = null
 let windsAloftCache: { loadedAt: number; stations: WindsAloftStation[] } | null = null
 let tfrCache: { loadedAt: number; data: TfrGeoJsonFeatureCollection } | null = null
+const mosCache = new Map<string, { loadedAt: number; guidance: MosGuidance | null }>()
 const sectionalGeoTiffCache = new Map<string, Buffer>()
 const sectionalOverlayCache = new Map<string, { image: Buffer; bounds: [[number, number], [number, number]] }>()
 const nasrSubscriptionPageUrl = 'https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription'
@@ -223,6 +236,113 @@ async function fetchJson<T>(url: string): Promise<T> {
     return [] as T
   }
   return JSON.parse(text) as T
+}
+
+function buildMosStationCandidates(stationId: string) {
+  const normalized = stationId.trim().toUpperCase()
+  const candidates = new Set<string>()
+
+  if (normalized.length >= 3) {
+    candidates.add(normalized)
+  }
+
+  if (normalized.length === 3) {
+    candidates.add(`K${normalized}`)
+  }
+
+  if (normalized.length === 4 && normalized.startsWith('K')) {
+    candidates.add(normalized.slice(1))
+  }
+
+  return [...candidates]
+}
+
+function extractMosStationBlock(rawText: string, stationCandidates: string[]) {
+  for (const candidate of stationCandidates) {
+    const startRegex = new RegExp(`(^|\\n)\\s*${candidate}\\s+`, 'i')
+    const startMatch = rawText.match(startRegex)
+    if (!startMatch || startMatch.index == null) {
+      continue
+    }
+
+    const startIndex = startMatch.index + (startMatch[1] ? startMatch[1].length : 0)
+    const remainder = rawText.slice(startIndex)
+    const endMatch = remainder.match(/\n\s{20,}\n/)
+    const block = endMatch ? remainder.slice(0, endMatch.index) : remainder.slice(0, 2200)
+    const cleaned = block.trim()
+
+    if (cleaned) {
+      return cleaned
+    }
+  }
+
+  return null
+}
+
+async function fetchMosGuidanceForStation(stationId: string): Promise<MosGuidance | null> {
+  const normalized = stationId.trim().toUpperCase()
+  if (!normalized) {
+    return null
+  }
+
+  const cacheKey = normalized
+  const cacheWindowMs = 30 * 60 * 1000
+  const cached = mosCache.get(cacheKey)
+  if (cached && Date.now() - cached.loadedAt < cacheWindowMs) {
+    return cached.guidance
+  }
+
+  const stationCandidates = buildMosStationCandidates(normalized)
+  if (!stationCandidates.length) {
+    return null
+  }
+
+  const files = [
+    { key: 'mavRaw' as const, url: 'https://www.weather.gov/source/mdl/MOS/GFSMAV.txt' },
+    { key: 'mexRaw' as const, url: 'https://www.weather.gov/source/mdl/MOS/GFSMEX.txt' },
+    { key: 'metRaw' as const, url: 'https://www.weather.gov/source/mdl/MOS/NAMMET.txt' }
+  ]
+
+  const fetched = await Promise.all(files.map(async ({ key, url }) => {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'text/plain',
+          'User-Agent': 'NavLog/1.0'
+        }
+      })
+
+      if (!response.ok) {
+        return [key, null] as const
+      }
+
+      const text = await response.text()
+      return [key, extractMosStationBlock(text, stationCandidates)] as const
+    } catch {
+      return [key, null] as const
+    }
+  }))
+
+  const guidance: MosGuidance = {
+    station: stationCandidates[0],
+    mavRaw: null,
+    mexRaw: null,
+    metRaw: null
+  }
+
+  for (const [key, value] of fetched) {
+    guidance[key] = value
+  }
+
+  const hasAny = Boolean(guidance.mavRaw || guidance.mexRaw || guidance.metRaw)
+  const result = hasAny ? guidance : null
+
+  mosCache.set(cacheKey, {
+    loadedAt: Date.now(),
+    guidance: result
+  })
+
+  return result
 }
 
 async function fetchTfrGeoJson(): Promise<TfrGeoJsonFeatureCollection> {
@@ -806,16 +926,30 @@ async function fetchAirportFrequenciesDataset() {
     if (normalized.includes('CTAF')) return 'CTAF'
     if (normalized.includes('UNICOM') || normalized.includes('UNIC ')) return 'UNICOM'
     if (normalized.includes('MULTICOM')) return 'MULTICOM'
+    if (normalized.includes('LCL') || normalized.includes('LOCAL')) return 'TWR'
     if (normalized.includes('TOWER') || normalized.includes(' TWR')) return 'TWR'
     if (normalized.includes('GROUND') || normalized.includes(' GND')) return 'GND'
     if (normalized.includes('APPROACH') || normalized.includes(' APP')) return 'APP'
     if (normalized.includes('DEPARTURE') || normalized.includes(' DEP')) return 'DEP'
-    if (normalized.includes('CLEARANCE') || normalized.includes('CLNC')) return 'CLNC'
+    if (normalized.includes('CLEARANCE') || normalized.includes('CLNC') || normalized.includes(' CD/')) return 'CLNC'
     if (normalized.includes('FSS') || normalized.includes('RDO')) return 'FSS'
     return null
   }
 
   const commFrequencyRegex = /\b1(?:1[8-9]|2\d|3[0-6])\.\d{1,3}\b/g
+
+  const normalizeAirportIdent = (value: string | null | undefined) => {
+    const normalized = String(value ?? '').trim().toUpperCase()
+    if (!normalized) {
+      return null
+    }
+
+    if (normalized.length === 4 && normalized.startsWith('K')) {
+      return normalized.slice(1)
+    }
+
+    return normalized
+  }
 
   const frequencies: AirportFrequencyRecord[] = []
   for (const line of lines) {
@@ -824,7 +958,7 @@ async function fetchAirportFrequenciesDataset() {
     }
 
     const siteKey = line.slice(3, 14).trim()
-    const airportIdent = line.slice(27, 31).trim().toUpperCase()
+    const airportIdent = normalizeAirportIdent(line.slice(27, 31))
     const unicom = line.slice(981, 988).trim()
     const ctaf = line.slice(988, 995).trim()
 
@@ -833,6 +967,9 @@ async function fetchAirportFrequenciesDataset() {
     }
 
     knownAirportIdents.add(airportIdent)
+    if (airportIdent.length === 3) {
+      knownAirportIdents.add(`K${airportIdent}`)
+    }
 
     if (siteKey) {
       airportIdentBySiteKey.set(siteKey, airportIdent)
@@ -898,7 +1035,80 @@ async function fetchAirportFrequenciesDataset() {
     const twrText = zip.readAsText('TWR.txt')
     const twrLines = twrText.split(/\r?\n/)
 
+    const inferTwrServiceType = (text: string) => {
+      const normalized = text.toUpperCase()
+      const inferred = inferCommType(normalized)
+      if (inferred) return inferred
+      if (normalized.includes('LCL') || normalized.includes('LOCAL')) return 'TWR'
+      if (normalized.includes('GND')) return 'GND'
+      if (normalized.includes('CD')) return 'CLNC'
+      if (normalized.includes('APCH') || normalized.includes('APP') || normalized.includes('APC')) return 'APP'
+      if (normalized.includes('DEP')) return 'DEP'
+      return 'TWR'
+    }
+
     for (const line of twrLines) {
+      if (line.startsWith('TWR3') && line.length >= 12) {
+        const primaryIdent = normalizeAirportIdent(line.slice(4, 8))
+        if (!primaryIdent || !knownAirportIdents.has(primaryIdent)) {
+          continue
+        }
+
+        const detail = line.slice(8).toUpperCase()
+        const pairRegex = /(\b\d{3}\.\d{1,3}\b)\s+([;A-Z][A-Z0-9/ ();-]{0,40})/g
+        const pairMatches = [...detail.matchAll(pairRegex)]
+        if (!pairMatches.length) {
+          continue
+        }
+
+        const capturedVhfFrequencies = new Set<string>()
+
+        for (const match of pairMatches) {
+          const pairedFrequency = match[1]
+          const serviceText = String(match[2] ?? '').replace(/\s+/g, ' ').trim()
+          const parsed = Number(pairedFrequency)
+          if (Number.isNaN(parsed)) {
+            continue
+          }
+
+          if (parsed < 118 || parsed > 136.975) {
+            continue
+          }
+
+          capturedVhfFrequencies.add(parsed.toFixed(3))
+          const type = inferTwrServiceType(serviceText)
+
+          frequencies.push({
+            airportIdent: primaryIdent,
+            type,
+            description: serviceText || type,
+            frequencyMHz: parsed.toFixed(3)
+          })
+        }
+
+        const vhfFallbackMatches = [...detail.matchAll(commFrequencyRegex)]
+        for (const fallbackMatch of vhfFallbackMatches) {
+          const parsed = Number(fallbackMatch[0])
+          if (Number.isNaN(parsed)) {
+            continue
+          }
+
+          const frequencyMHz = parsed.toFixed(3)
+          if (capturedVhfFrequencies.has(frequencyMHz)) {
+            continue
+          }
+
+          frequencies.push({
+            airportIdent: primaryIdent,
+            type: 'TWR',
+            description: 'TWR',
+            frequencyMHz
+          })
+        }
+
+        continue
+      }
+
       if (!line.startsWith('TWR7') || line.length < 117) {
         continue
       }
@@ -907,9 +1117,12 @@ async function fetchAirportFrequenciesDataset() {
       const satelliteUseText = line.slice(52, 102).trim()
       const satelliteSiteKey = line.slice(102, 113).trim()
       const satelliteIdent = line.slice(113, 117).trim().toUpperCase()
+      const normalizedSatelliteIdent = normalizeAirportIdent(satelliteIdent)
 
-      const airportIdent = knownAirportIdents.has(satelliteIdent)
-        ? satelliteIdent
+      const airportIdent = normalizedSatelliteIdent && knownAirportIdents.has(normalizedSatelliteIdent)
+        ? normalizedSatelliteIdent
+        : knownAirportIdents.has(satelliteIdent)
+          ? normalizeAirportIdent(satelliteIdent)
         : airportIdentBySiteKey.get(satelliteSiteKey) ?? null
 
       if (!airportIdent) {
@@ -963,7 +1176,8 @@ async function fetchAirportFrequenciesDataset() {
       }
 
       const tokens = upper.split(/[^A-Z0-9]+/).filter(Boolean)
-      const airportIdent = tokens.find((token: string) => knownAirportIdents.has(token)) ?? null
+      const airportToken = tokens.find((token: string) => knownAirportIdents.has(token)) ?? null
+      const airportIdent = normalizeAirportIdent(airportToken)
       if (!airportIdent) {
         continue
       }
@@ -1107,6 +1321,153 @@ function rankFrequencyType(type: string) {
   return index === -1 ? order.length : index
 }
 
+function normalizeFrequencyType(type: string) {
+  const normalized = type.toUpperCase().trim()
+
+  if (!normalized) return 'OTHER'
+  if (normalized.includes('ATIS')) return 'ATIS'
+  if (normalized.includes('AWOS')) return 'AWOS'
+  if (normalized.includes('ASOS')) return 'ASOS'
+  if (normalized.includes('CTAF')) return 'CTAF'
+  if (normalized.includes('UNIC')) return 'UNICOM'
+  if (normalized.includes('LCL') || normalized.includes('TWR') || normalized.includes('TOWER')) return 'TWR'
+  if (normalized.includes('GND') || normalized.includes('GROUND')) return 'GND'
+  if (normalized.includes('CLNC') || normalized.includes('CLEARANCE') || normalized === 'CD' || /\bCD\b/.test(normalized) || normalized.includes('CD/')) return 'CLNC'
+  if (normalized.includes('APCH') || normalized.includes('APPROACH') || normalized.includes('APC') || normalized === 'APP') return 'APP'
+  if (normalized.includes('DEP') || normalized.includes('DEPARTURE')) return 'DEP'
+  if (normalized.includes('RDO')) return 'RDO'
+  if (normalized.includes('FSS')) return 'FSS'
+
+  return normalized
+}
+
+function deriveFrequencyType(type: string, description: string) {
+  const fromType = normalizeFrequencyType(type)
+  const fromDescription = normalizeFrequencyType(description)
+
+  const stronglyTyped = new Set(['ATIS', 'AWOS', 'ASOS', 'CTAF', 'UNICOM', 'GND', 'CLNC', 'RDO', 'FSS'])
+  if (stronglyTyped.has(fromDescription)) {
+    return fromDescription
+  }
+
+  if (stronglyTyped.has(fromType)) {
+    return fromType
+  }
+
+  if ((fromType === 'APP' || fromType === 'DEP' || fromType === 'TWR' || fromType === 'OTHER') && (fromDescription === 'APP' || fromDescription === 'DEP')) {
+    return fromDescription
+  }
+
+  if (fromType === 'OTHER' && fromDescription === 'TWR') {
+    return 'TWR'
+  }
+
+  return fromType
+}
+
+function normalizeFrequencyDescription(description: string) {
+  return description
+    .toUpperCase()
+    .replace(/[^A-Z0-9/ ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isGenericFrequencyDescription(type: string, description: string) {
+  const normalizedType = normalizeFrequencyType(type)
+  const normalizedDescription = normalizeFrequencyDescription(description)
+
+  if (!normalizedDescription) {
+    return true
+  }
+
+  if (normalizedDescription === normalizedType) {
+    return true
+  }
+
+  const genericDescriptions = new Set([
+    'ATIS',
+    'AWOS',
+    'ASOS',
+    'CTAF',
+    'UNICOM',
+    'TOWER',
+    'GROUND',
+    'CLEARANCE',
+    'CLEARANCE DELIVERY',
+    'APP',
+    'APCH',
+    'APPROACH',
+    'DEP',
+    'DEPARTURE',
+    'RDO',
+    'FSS'
+  ])
+
+  return genericDescriptions.has(normalizedDescription)
+}
+
+function scoreFrequencyDescription(type: string, description: string) {
+  const normalizedDescription = normalizeFrequencyDescription(description)
+  const genericPenalty = isGenericFrequencyDescription(type, normalizedDescription) ? 0 : 100
+  return genericPenalty + Math.min(normalizedDescription.length, 120)
+}
+
+function preferFrequencyRecordDescription(type: string, currentDescription: string, nextDescription: string) {
+  const currentScore = scoreFrequencyDescription(type, currentDescription)
+  const nextScore = scoreFrequencyDescription(type, nextDescription)
+
+  if (nextScore !== currentScore) {
+    return nextScore > currentScore
+  }
+
+  return nextDescription.length > currentDescription.length
+}
+
+function buildApproachDepartureSignature(description: string) {
+  return normalizeFrequencyDescription(description)
+    .replace(/\b(APCH|APPROACH|APP|DEP|DEPARTURE)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function hasApproachDepartureHint(description: string) {
+  const normalized = normalizeFrequencyDescription(description)
+  return /\b(APCH|APPROACH|DEP|DEPARTURE)\b/.test(normalized)
+}
+
+function sanitizeFrequencyDescription(description: string, type: string) {
+  const collapsed = description
+    .replace(/[^\x20-\x7E]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const stripped = collapsed
+    .replace(/^[^A-Z0-9]+/i, '')
+    .replace(/[^A-Z0-9]+$/i, '')
+    .trim()
+
+  const expanded = stripped
+    .replace(/\bLCL\/P\b/gi, 'Local Control (Primary)')
+    .replace(/\bGND\/P\b/gi, 'Ground (Primary)')
+    .replace(/\bCD\/P\b/gi, 'Clearance Delivery (Primary)')
+    .replace(/\bAPCH\/P\b/gi, 'Approach (Primary)')
+    .replace(/\bDEP\/P\b/gi, 'Departure (Primary)')
+    .replace(/\bAPC\b/gi, 'Approach Control')
+    .replace(/\bTRSA\b/gi, 'Terminal Radar Service Area')
+    .replace(/\bTRS\b/gi, 'Terminal Radar Service')
+    .replace(/\bRDO\b/gi, 'Flight Service Radio')
+    .replace(/\bFSS\b/gi, 'Flight Service')
+    .replace(/\bIC\b/gi, 'Intercom')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (/^\d{3}\.\d(?:\s+\d{3}\.\d)*$/.test(expanded)) {
+    return normalizeFrequencyType(type)
+  }
+
+  return expanded || normalizeFrequencyType(type)
+}
+
 function isMilitaryFrequency(type: string, description: string, frequencyMHzText: string) {
   const normalizedType = type.toUpperCase()
   const normalizedDescription = description.toUpperCase()
@@ -1121,6 +1482,26 @@ function isMilitaryFrequency(type: string, description: string, frequencyMHzText
   }
 
   if (!Number.isNaN(frequencyMHz) && frequencyMHz >= 137) {
+    return true
+  }
+
+  return false
+}
+
+function isEmergencyFrequency(type: string, description: string, frequencyMHzText: string) {
+  const normalizedType = type.toUpperCase()
+  const normalizedDescription = description.toUpperCase()
+  const frequencyMHz = Number(frequencyMHzText)
+
+  if (normalizedType.includes('EMERG') || normalizedDescription.includes('EMERG') || normalizedDescription.includes('EMERGENCY')) {
+    return true
+  }
+
+  if (normalizedDescription.includes('GUARD') || normalizedDescription.includes('DISTRESS')) {
+    return true
+  }
+
+  if (!Number.isNaN(frequencyMHz) && Math.abs(frequencyMHz - 121.5) < 0.001) {
     return true
   }
 
@@ -2092,6 +2473,7 @@ app.get('/api/weather/:icao', async (req, res) => {
         res.json({
           metar: null,
           taf: null,
+          mos: null,
           sourceStation: null,
           fallbackUsed: false,
           nearestReportingStation: null
@@ -2100,9 +2482,13 @@ app.get('/api/weather/:icao', async (req, res) => {
       }
 
       const fallback = await fetchNearestReportingWeather(lat, lon)
+      const fallbackMos = fallback.sourceStation
+        ? await fetchMosGuidanceForStation(fallback.sourceStation)
+        : null
       res.json({
         metar: fallback.metar,
         taf: fallback.taf,
+        mos: fallbackMos,
         sourceStation: fallback.sourceStation,
         fallbackUsed: true,
         nearestReportingStation: fallback.nearestReportingStation
@@ -2111,11 +2497,13 @@ app.get('/api/weather/:icao', async (req, res) => {
     }
 
     const primary = await fetchWeatherFromStationIds([weatherStation])
+    const primaryMos = await fetchMosGuidanceForStation(primary.sourceStation ?? weatherStation)
 
     if (primary.metar || primary.taf) {
       res.json({
         metar: primary.metar,
         taf: primary.taf,
+        mos: primaryMos,
         sourceStation: primary.sourceStation ?? weatherStation,
         fallbackUsed: false,
         nearestReportingStation: null
@@ -2127,6 +2515,7 @@ app.get('/api/weather/:icao', async (req, res) => {
       res.json({
         metar: null,
         taf: null,
+        mos: primaryMos,
         sourceStation: weatherStation,
         fallbackUsed: false,
         nearestReportingStation: null
@@ -2135,10 +2524,14 @@ app.get('/api/weather/:icao', async (req, res) => {
     }
 
     const fallback = await fetchNearestReportingWeather(lat, lon)
+    const fallbackMos = fallback.sourceStation
+      ? await fetchMosGuidanceForStation(fallback.sourceStation)
+      : null
 
     res.json({
       metar: fallback.metar,
       taf: fallback.taf,
+      mos: fallbackMos,
       sourceStation: fallback.sourceStation,
       fallbackUsed: true,
       nearestReportingStation: fallback.nearestReportingStation
@@ -2170,22 +2563,94 @@ app.get('/api/frequencies/:icao', async (req, res) => {
     const matches = allFrequencies
       .filter((frequency) => candidates.includes(frequency.airportIdent))
       .filter((frequency) => !isMilitaryFrequency(frequency.type, frequency.description, frequency.frequencyMHz))
-      .map((frequency) => ({
-        type: frequency.type,
-        description: frequency.description,
-        frequencyMHz: frequency.frequencyMHz,
-        airportIdent: frequency.airportIdent
-      }))
+      .filter((frequency) => !isEmergencyFrequency(frequency.type, frequency.description, frequency.frequencyMHz))
+      .map((frequency) => {
+        const type = deriveFrequencyType(frequency.type, frequency.description)
+        return {
+          type,
+          description: sanitizeFrequencyDescription(frequency.description, type),
+          frequencyMHz: Number(frequency.frequencyMHz).toFixed(3),
+          airportIdent: frequency.airportIdent
+        }
+      })
 
-    const deduped = matches.filter((item, index, array) =>
-      array.findIndex((candidate) =>
-        candidate.type === item.type &&
-        candidate.description === item.description &&
-        candidate.frequencyMHz === item.frequencyMHz
-      ) === index
+    const dedupedByTypeAndFrequency = new Map<string, (typeof matches)[number]>()
+    for (const item of matches) {
+      const dedupKey = `${item.type}|${item.frequencyMHz}`
+      const existing = dedupedByTypeAndFrequency.get(dedupKey)
+
+      if (!existing) {
+        dedupedByTypeAndFrequency.set(dedupKey, item)
+        continue
+      }
+
+      if (preferFrequencyRecordDescription(item.type, existing.description, item.description)) {
+        dedupedByTypeAndFrequency.set(dedupKey, item)
+      }
+    }
+
+    const mergedApproachDeparture = new Map<string, (typeof matches)[number]>()
+    for (const item of dedupedByTypeAndFrequency.values()) {
+      const canMergeApproachDeparture = (item.type === 'APP' || item.type === 'DEP') && hasApproachDepartureHint(item.description)
+
+      if (!canMergeApproachDeparture) {
+        const key = `${item.airportIdent}|${item.type}|${item.frequencyMHz}|${normalizeFrequencyDescription(item.description)}`
+        mergedApproachDeparture.set(key, item)
+        continue
+      }
+
+      const signature = buildApproachDepartureSignature(item.description)
+      if (!signature) {
+        const key = `${item.airportIdent}|${item.type}|${item.frequencyMHz}|${normalizeFrequencyDescription(item.description)}`
+        mergedApproachDeparture.set(key, item)
+        continue
+      }
+
+      const appDepKey = `${item.airportIdent}|APP/DEP|${item.frequencyMHz}|${signature}`
+      const existing = mergedApproachDeparture.get(appDepKey)
+      if (!existing) {
+        mergedApproachDeparture.set(appDepKey, {
+          ...item,
+          type: 'APP/DEP'
+        })
+        continue
+      }
+
+      if (preferFrequencyRecordDescription('APP', existing.description, item.description)) {
+        mergedApproachDeparture.set(appDepKey, {
+          ...item,
+          type: 'APP/DEP'
+        })
+      }
+    }
+
+    const mergedFrequencies = [...mergedApproachDeparture.values()]
+    const ctafFrequencies = new Set(
+      mergedFrequencies
+        .filter((item) => item.type === 'CTAF')
+        .map((item) => item.frequencyMHz)
     )
 
-    const frequencies = deduped
+    const frequencies = mergedFrequencies
+      .map((item) => {
+        if (item.type !== 'TWR' || !ctafFrequencies.has(item.frequencyMHz)) {
+          return item
+        }
+
+        const normalizedDescription = normalizeFrequencyDescription(item.description)
+        if (normalizedDescription.includes('PART TIME') || normalizedDescription.includes('PART-TIME')) {
+          return item
+        }
+
+        const nextDescription = normalizedDescription === 'TWR'
+          ? 'Part-time tower'
+          : `${item.description} · Part-time tower`
+
+        return {
+          ...item,
+          description: nextDescription
+        }
+      })
       .sort((a, b) => {
         const typeDelta = rankFrequencyType(a.type) - rankFrequencyType(b.type)
         if (typeDelta !== 0) {
