@@ -1547,6 +1547,29 @@ th {
   margin: 0.1rem 0;
 }
 
+.print-weather-stamp {
+  margin: 0.25rem 0 0.25rem;
+  color: #4b5563;
+  font-size: 0.8rem;
+}
+
+.print-weather-write-section {
+  margin: 0.2rem 0 0.35rem;
+}
+
+.print-weather-write-label {
+  margin: 0 0 0.16rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.print-weather-write-box {
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  min-height: 56px;
+  background: #fff;
+}
+
 .print-navlog-table {
   margin-top: 0.8rem;
 }
@@ -1887,6 +1910,29 @@ th {
   .freq-list {
     grid-template-columns: 1fr 1fr;
     gap: 0.02in 0.08in;
+  }
+
+  .print-weather-stamp {
+    margin: 0.02in 0 0.03in;
+    font-size: 6.8px;
+    color: #222;
+  }
+
+  .print-weather-write-section {
+    margin: 0.02in 0 0.04in;
+  }
+
+  .print-weather-write-label {
+    margin: 0 0 0.02in;
+    font-size: 6.8px;
+    font-weight: 700;
+  }
+
+  .print-weather-write-box {
+    min-height: 0.45in;
+    border: 1px solid #777;
+    border-radius: 0;
+    background: #fff;
   }
 
   .print-diagram-image {

@@ -848,6 +848,15 @@ function App() {
     const totalFuel = legs.reduce((sum, leg) => sum + leg.fuelGallons, 0)
     return { totalDistance, totalTime, totalFuel }
   }, [legs])
+  const printWeatherTimestamp = useMemo(
+    () => new Date().toLocaleString(),
+    [
+      depWeather?.metar?.reportTime,
+      depWeather?.taf?.issueTime,
+      arrWeather?.metar?.reportTime,
+      arrWeather?.taf?.issueTime
+    ]
+  )
 
   const waypointLines = useMemo(
     () => waypointsInput.split('\n').map((line) => line.trim()).filter(Boolean),
@@ -3689,6 +3698,11 @@ function App() {
               <article>
                 <h3>Departure {depAirport.airport.icao}</h3>
                 <p>{formatDecodedWeather(depWeather)}</p>
+                <p className="print-weather-stamp">Weather snapshot printed: {printWeatherTimestamp}</p>
+                <div className="print-weather-write-section">
+                  <p className="print-weather-write-label">Current weather update (write-in):</p>
+                  <div className="print-weather-write-box" />
+                </div>
                 <ul className="freq-list">
                   {depFrequencies.slice(0, 10).map((frequency) => (
                     <li key={`dep-${frequency.type}-${frequency.frequencyMHz}`}>
@@ -3700,6 +3714,11 @@ function App() {
               <article>
                 <h3>Arrival {arrAirport.airport.icao}</h3>
                 <p>{formatDecodedWeather(arrWeather)}</p>
+                <p className="print-weather-stamp">Weather snapshot printed: {printWeatherTimestamp}</p>
+                <div className="print-weather-write-section">
+                  <p className="print-weather-write-label">Current weather update (write-in):</p>
+                  <div className="print-weather-write-box" />
+                </div>
                 <ul className="freq-list">
                   {arrFrequencies.slice(0, 10).map((frequency) => (
                     <li key={`arr-${frequency.type}-${frequency.frequencyMHz}`}>
