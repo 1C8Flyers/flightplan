@@ -718,6 +718,7 @@ function App() {
   const fallbackWindDir = 270
   const fallbackWindSpeed = 15
   const defaultLocationZoom = 10
+  const searchSelectionMinZoom = 12
   const cruiseAltitudeOptions = [3000, 6000, 6500, 9000, 12000, 18000, 24000]
 
   const [departure, setDeparture] = useState('')
@@ -841,6 +842,8 @@ function App() {
   const telemetryIdRef = useRef(0)
   const suppressNextMapClickRef = useRef(false)
   const routeInsertHandleRef = useRef<any>(null)
+  const manualMapInteractionRef = useRef(false)
+  const manualMapInteractionCleanupRef = useRef<(() => void) | null>(null)
 
   const totals = useMemo(() => {
     const totalDistance = legs.reduce((sum, leg) => sum + leg.distanceNm, 0)
@@ -1377,7 +1380,10 @@ function App() {
     setMapAirportSearchFocused(false)
 
     if (mapRef.current) {
-      mapRef.current.panTo([airport.lat, airport.lon])
+      const currentZoom = Number(mapRef.current.getZoom?.() ?? searchSelectionMinZoom)
+      const maxZoom = Number(mapRef.current.getMaxZoom?.() ?? searchSelectionMinZoom)
+      const targetZoom = Math.min(maxZoom, Math.max(searchSelectionMinZoom, currentZoom))
+      mapRef.current.setView([airport.lat, airport.lon], targetZoom)
     }
 
     await selectMapAirportFromIdent(airport.ident)
@@ -1410,6 +1416,7 @@ function App() {
         }
 
         setUserLocation(location)
+        manualMapInteractionRef.current = false
 
         if (mapRef.current) {
           mapRef.current.setView([location.lat, location.lon], Math.max(selectedPlanLayer.minZoom, defaultLocationZoom))
@@ -2392,6 +2399,23 @@ function App() {
 
         leaflet.control.zoom({ position: 'bottomleft' }).addTo(mapRef.current)
 
+        const mapContainer = mapRef.current.getContainer?.() as HTMLElement | undefined
+        if (mapContainer) {
+          const markManualMapInteraction = () => {
+            manualMapInteractionRef.current = true
+          }
+
+          mapContainer.addEventListener('mousedown', markManualMapInteraction, { passive: true })
+          mapContainer.addEventListener('touchstart', markManualMapInteraction, { passive: true })
+          mapContainer.addEventListener('wheel', markManualMapInteraction, { passive: true })
+
+          manualMapInteractionCleanupRef.current = () => {
+            mapContainer.removeEventListener('mousedown', markManualMapInteraction)
+            mapContainer.removeEventListener('touchstart', markManualMapInteraction)
+            mapContainer.removeEventListener('wheel', markManualMapInteraction)
+          }
+        }
+
         mapResizeTimers.push(window.setTimeout(() => {
           if (!cancelled && mapRef.current) {
             forceMapRelayout()
@@ -2458,7 +2482,7 @@ function App() {
           schematicEnabled: showSchematicSurfaceLayout,
           mode: selectedMapAirport ? 'selected' : 'in-view',
           selectedAirportIdent: selectedMapAirport?.airport.icao ?? null,
-          maxAirports: 30,
+          maxAirports: 80,
           minZoom: 11
         })
       } else {
@@ -2466,8 +2490,9 @@ function App() {
         airportDiagramsLayerRef.current.setSchematicEnabled(showSchematicSurfaceLayout)
         airportDiagramsLayerRef.current.setMode(selectedMapAirport ? 'selected' : 'in-view')
         airportDiagramsLayerRef.current.setSelectedAirportIdent(selectedMapAirport?.airport.icao ?? null)
-        airportDiagramsLayerRef.current.refreshNow()
       }
+
+      airportDiagramsLayerRef.current.refreshNow()
 
       function applyFallbackTileLayer(message?: string) {
         if (!mapRef.current) {
@@ -2653,7 +2678,7 @@ function App() {
           markerLayerRef.current = null
         }
 
-        if (userLocation) {
+        if (userLocation && !selectedMapAirport && !manualMapInteractionRef.current) {
           map.setView([userLocation.lat, userLocation.lon], Math.max(selectedPlanLayer.minZoom, defaultLocationZoom))
         }
 
@@ -2976,6 +3001,10 @@ function App() {
 
   useEffect(() => {
     return () => {
+      if (manualMapInteractionCleanupRef.current) {
+        manualMapInteractionCleanupRef.current()
+      }
+
       if (airportDiagramsLayerRef.current) {
         airportDiagramsLayerRef.current.destroy()
       }
@@ -2992,6 +3021,7 @@ function App() {
       routeLayerRef.current = null
       markerLayerRef.current = null
       routeInsertHandleRef.current = null
+      manualMapInteractionCleanupRef.current = null
     }
   }, [])
 

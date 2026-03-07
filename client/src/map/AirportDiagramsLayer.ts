@@ -53,18 +53,20 @@ type DiagramLayerOptions = {
 
 const cacheTtlMs = 5 * 60 * 1000
 const moveDebounceMs = 220
+const diagramFetchConcurrency = 8
 
 function normalizeSurface(surface: string) {
   return surface.trim().toUpperCase()
 }
 
-function runwayStyle(surface: string, closed: boolean): L.PathOptions {
+function runwayStyle(surface: string, closed: boolean, emphasized: boolean): L.PathOptions {
+  const baseWeightBoost = emphasized ? 0.8 : 0
   const normalized = normalizeSurface(surface)
 
   if (normalized.includes('WATER')) {
     return {
       color: '#5c7ca0',
-      weight: 1.2,
+      weight: 1.2 + baseWeightBoost,
       fillOpacity: 0,
       opacity: closed ? 0.5 : 0.75
     }
@@ -73,20 +75,30 @@ function runwayStyle(surface: string, closed: boolean): L.PathOptions {
   if (normalized.includes('GRAVEL') || normalized.includes('TURF') || normalized.includes('DIRT') || normalized.includes('GRASS')) {
     return {
       color: '#896b4f',
-      weight: 1.3,
+      weight: 1.3 + baseWeightBoost,
       dashArray: '6 4',
       fillColor: '#c4b090',
-      fillOpacity: closed ? 0.18 : 0.28,
+      fillOpacity: closed ? 0.2 : (emphasized ? 0.38 : 0.28),
       opacity: closed ? 0.45 : 0.8
     }
   }
 
   return {
     color: '#3d4a5b',
-    weight: 1.5,
+    weight: 1.5 + baseWeightBoost,
     fillColor: '#6f7e8d',
-    fillOpacity: closed ? 0.18 : 0.48,
+    fillOpacity: closed ? 0.2 : (emphasized ? 0.62 : 0.48),
     opacity: closed ? 0.45 : 0.95
+  }
+}
+
+function resolveZoomThresholds(minZoom: number, mapMaxZoom: number) {
+  const labelThreshold = Math.min(13, Math.max(minZoom + 1, mapMaxZoom - 1))
+  const detailThreshold = Math.min(15, Math.max(minZoom + 2, mapMaxZoom))
+
+  return {
+    labelThreshold,
+    detailThreshold
   }
 }
 
@@ -268,11 +280,22 @@ export class AirportDiagramsLayer {
   }
 
   private async loadDiagrams(airports: DiagramAirport[], signal: AbortSignal) {
+    if (!airports.length) {
+      return []
+    }
+
     const results: DiagramData[] = []
-    for (const airport of airports) {
-      const diagram = await this.fetchDiagram(airport.ident, signal)
-      if (diagram) {
-        results.push(diagram)
+    for (let index = 0; index < airports.length; index += diagramFetchConcurrency) {
+      const batch = airports.slice(index, index + diagramFetchConcurrency)
+      const loaded = await Promise.all(batch.map(async (airport) => this.fetchDiagram(airport.ident, signal)))
+      if (signal.aborted) {
+        return []
+      }
+
+      for (const diagram of loaded) {
+        if (diagram) {
+          results.push(diagram)
+        }
       }
     }
 
@@ -307,10 +330,22 @@ export class AirportDiagramsLayer {
 
   private render(diagrams: DiagramData[]) {
     const zoom = this.map.getZoom()
-    const showLabels = zoom >= 13
-    const showDetailOverlays = zoom >= 15
+    const { labelThreshold, detailThreshold } = resolveZoomThresholds(this.minZoom, this.map.getMaxZoom())
+    const showLabels = zoom >= labelThreshold
+    const showDetailOverlays = zoom >= detailThreshold
+    const emphasizeRunways = showLabels
 
-    const renderKey = `${diagrams.map((diagram) => diagram.airport.ident).join(',')}|${showLabels ? 'L1' : 'L0'}|${showDetailOverlays ? 'D1' : 'D0'}|${this.schematicEnabled ? 'S1' : 'S0'}`
+    const renderKey = diagrams
+      .map((diagram) => [
+        diagram.airport.ident,
+        diagram.runways.features.length,
+        diagram.overlays.features.length,
+        diagram.runwayLabels.features.length,
+        diagram.schematic.apron.features.length,
+        diagram.schematic.taxi.features.length
+      ].join(':'))
+      .join(',') + `|${showLabels ? 'L1' : 'L0'}|${showDetailOverlays ? 'D1' : 'D0'}|${this.schematicEnabled ? 'S1' : 'S0'}`
+
     if (renderKey === this.lastRenderKey) {
       return
     }
@@ -321,7 +356,7 @@ export class AirportDiagramsLayer {
       const runwaysLayer = L.geoJSON(diagram.runways as never, {
         style(feature) {
           const properties = feature?.properties ?? {}
-          return runwayStyle(String(properties.surface ?? ''), Boolean(properties.closed))
+          return runwayStyle(String(properties.surface ?? ''), Boolean(properties.closed), emphasizeRunways)
         }
       })
 
